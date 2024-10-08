@@ -416,3 +416,128 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_DB_File_ProcessBatchRequestW
 	s.True(s.env.IsWorkflowCompleted())
 	s.NoError(s.env.GetWorkflowError())
 }
+
+func (s *ProcessBatchRequestWorkflowTestSuite) Test_Local_File_ProcessBatchRequestWorkflow_Mock_Reader() {
+	// get test logger
+	l := getTestLogger()
+
+	// set environment logger
+	s.SetLogger(l)
+
+	s.env = s.NewTestWorkflowEnvironment()
+
+	// register workflow
+	s.env.RegisterWorkflow(bo.ProcessBatchRequestWorkflow)
+
+	// register activities
+	s.env.RegisterActivityWithOptions(bo.GetCSVHeadersActivity, activity.RegisterOptions{
+		Name: bo.GetCSVHeadersActivityName,
+	})
+	s.env.RegisterActivityWithOptions(bo.GetNextOffsetActivity, activity.RegisterOptions{
+		Name: bo.GetNextOffsetActivityName,
+	})
+	s.env.RegisterActivityWithOptions(bo.ProcessBatchActivity, activity.RegisterOptions{
+		Name: bo.ProcessBatchActivityName,
+	})
+
+	// create file client
+	fileClient := getFileClientMock()
+
+	ctx := context.WithValue(context.Background(), bo.ReaderClientContextKey, fileClient)
+	s.env.SetWorkerOptions(worker.Options{
+		BackgroundActivityContext: ctx,
+	})
+
+	s.env.SetTestTimeout(24 * time.Hour)
+
+	start := time.Now()
+
+	filePath := fmt.Sprintf("%s/%s", TEST_DIR, DATA_PATH)
+	req := &bo.BatchRequest{
+		MaxBatches: 3,
+		BatchSize:  400,
+		Source: &bo.FileSource{
+			FileName: LIVE_FILE_NAME_1,
+			FilePath: filePath,
+		},
+	}
+
+	expectedCall := []string{
+		bo.GetCSVHeadersActivityName,
+		bo.GetNextOffsetActivityName,
+		bo.ProcessBatchActivityName,
+	}
+
+	var activityCalled []string
+	s.env.SetOnActivityStartedListener(func(activityInfo *activity.Info, ctx context.Context, args converter.EncodedValues) {
+		activityType := activityInfo.ActivityType.Name
+		if strings.HasPrefix(activityType, "internalSession") {
+			return
+		}
+		activityCalled = append(activityCalled, activityType)
+		// var lastOffset int64
+		switch activityType {
+		case expectedCall[0]:
+			// get headers
+			var input bo.FileInfo
+			s.NoError(args.Get(&input))
+			s.Equal(req.Source.FileName, input.FileName)
+		case expectedCall[1]:
+			// next offset
+			var input bo.FileInfo
+			s.NoError(args.Get(&input))
+			s.Equal(req.Source.FileName, input.FileName)
+		case expectedCall[2]:
+			// process batch
+			var input bo.Batch
+			s.NoError(args.Get(&input))
+			s.Equal(req.Source.FileName, input.FileInfo.FileName)
+			// s.Equal(input.End, lastOffset)
+		default:
+			panic("Test_Local_File_ProcessBatchRequestWorkflow - unexpected activity call")
+		}
+	})
+
+	defer func() {
+		if err := recover(); err != nil {
+			l.Error(
+				"Test_Local_File_ProcessBatchRequestWorkflow - panicked",
+				slog.Any("error", err),
+				slog.String("wkfl", bo.ProcessBatchRequestWorkflowName))
+		}
+
+		err := s.env.GetWorkflowError()
+		if err != nil {
+			l.Error("Test_Local_File_ProcessBatchRequestWorkflow - error", slog.Any("error", err))
+		} else {
+			var result bo.BatchRequest
+			s.env.GetWorkflowResult(&result)
+
+			timeTaken := time.Since(start)
+			batches := [][]int64{}
+			recordCount := 0
+			for _, v := range result.Batches {
+				batches = append(batches, []int64{v.Start, v.End, int64(len(v.Records))})
+				recordCount += len(v.Records)
+			}
+			sort.SliceStable(batches, func(i, j int) bool {
+				return batches[i][0] < batches[j][0]
+			})
+
+			fileInfo := result.Batches[fmt.Sprintf("%s-%d", LIVE_FILE_NAME_1, batches[len(batches)-1][0])].FileInfo
+			l.Info(
+				"Test_Local_File_ProcessBatchRequestWorkflow - time taken",
+				slog.Any("time-taken", fmt.Sprintf("%dms", timeTaken.Milliseconds())),
+				slog.Any("offsets", fileInfo.OffSets),
+				slog.Any("batches", batches),
+				slog.Any("record-count", recordCount))
+			s.True(recordCount == 25, "record count should be 25")
+			s.True(len(batches) == 9, "batch count should be 9")
+		}
+	}()
+
+	s.env.ExecuteWorkflow(bo.ProcessBatchRequestWorkflow, req)
+
+	s.True(s.env.IsWorkflowCompleted())
+	s.NoError(s.env.GetWorkflowError())
+}
