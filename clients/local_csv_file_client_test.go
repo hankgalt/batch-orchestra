@@ -109,3 +109,21 @@ func processCSVStream(t *testing.T, ctx context.Context, recStream <-chan bo.Res
 		}
 	}
 }
+
+func TestFilePath(t *testing.T) {
+	filePath := "data/scheduler/agents.csv"
+	base := filepath.Base(filePath)
+	require.Equal(t, base, "agents.csv")
+	dir := filepath.Dir(filePath)
+	require.Equal(t, dir, "data/scheduler")
+	ext := filepath.Ext(filePath)
+	require.Equal(t, ext, ".csv")
+
+	filePath = "data/_deleteme.db"
+	base = filepath.Base(filePath)
+	require.Equal(t, base, "_deleteme.db")
+	dir = filepath.Dir(filePath)
+	require.Equal(t, dir, "data")
+	ext = filepath.Ext(filePath)
+	require.Equal(t, ext, ".db")
+}

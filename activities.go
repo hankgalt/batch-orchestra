@@ -58,7 +58,7 @@ var (
 // GetCSVHeadersActivity populates state with headers info for a CSV file
 func GetCSVHeadersActivity(ctx context.Context, req *FileInfo, batchSize int64) (*FileInfo, error) {
 	l := activity.GetLogger(ctx)
-	l.Debug("GetCSVHeadersActivity - started", slog.String("file-name", req.FileName))
+	l.Debug("GetCSVHeadersActivity - started", slog.Any("file-info", req), slog.Int64("batch-size", batchSize))
 
 	// check for file name
 	if req.FileName == "" {

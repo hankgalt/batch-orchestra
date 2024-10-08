@@ -48,6 +48,14 @@ type FileInfo struct {
 	OffSets []int64
 }
 
+// batch request
+type BatchRequest struct {
+	MaxBatches int
+	BatchSize  int32
+	Source     *FileSource // or DBSource
+	Batches    map[string]*Batch
+}
+
 // batch in process state
 type Batch struct {
 	*FileInfo
