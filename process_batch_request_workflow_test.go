@@ -134,13 +134,6 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_Local_File_ProcessBatchReque
 			s.env.GetWorkflowResult(&result)
 
 			timeTaken := time.Since(start)
-			var fileInfo bo.FileInfo
-			for _, v := range result.Batches {
-				if v.FileInfo != nil {
-					fileInfo = *v.FileInfo
-					break
-				}
-			}
 			batches := [][]int64{}
 			recordCount := 0
 			for _, v := range result.Batches {
@@ -150,6 +143,8 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_Local_File_ProcessBatchReque
 			sort.SliceStable(batches, func(i, j int) bool {
 				return batches[i][0] < batches[j][0]
 			})
+
+			fileInfo := result.Batches[fmt.Sprintf("%s-%d", LIVE_FILE_NAME_1, batches[len(batches)-1][0])].FileInfo
 			l.Info(
 				"Test_Local_File_ProcessBatchRequestWorkflow - time taken",
 				slog.Any("time-taken", fmt.Sprintf("%dms", timeTaken.Milliseconds())),
@@ -274,13 +269,6 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_Cloud_File_ProcessBatchReque
 			s.env.GetWorkflowResult(&result)
 
 			timeTaken := time.Since(start)
-			var fileInfo bo.FileInfo
-			for _, v := range result.Batches {
-				if v.FileInfo != nil {
-					fileInfo = *v.FileInfo
-					break
-				}
-			}
 			batches := [][]int64{}
 			recordCount := 0
 			for _, v := range result.Batches {
@@ -290,6 +278,8 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_Cloud_File_ProcessBatchReque
 			sort.SliceStable(batches, func(i, j int) bool {
 				return batches[i][0] < batches[j][0]
 			})
+
+			fileInfo := result.Batches[fmt.Sprintf("%s-%d", LIVE_FILE_NAME_1, batches[len(batches)-1][0])].FileInfo
 			l.Info(
 				"Test_Cloud_File_ProcessBatchRequestWorkflow - time taken",
 				slog.Any("time-taken", fmt.Sprintf("%dms", timeTaken.Milliseconds())),
@@ -398,13 +388,6 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_DB_File_ProcessBatchRequestW
 			s.env.GetWorkflowResult(&result)
 
 			timeTaken := time.Since(start)
-			var fileInfo bo.FileInfo
-			for _, v := range result.Batches {
-				if v.FileInfo != nil {
-					fileInfo = *v.FileInfo
-					break
-				}
-			}
 			batches := [][]int64{}
 			recordCount := 0
 			for _, v := range result.Batches {
@@ -414,6 +397,8 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_DB_File_ProcessBatchRequestW
 			sort.SliceStable(batches, func(i, j int) bool {
 				return batches[i][0] < batches[j][0]
 			})
+
+			fileInfo := result.Batches[fmt.Sprintf("%s-%d", TABLE_NAME_1, batches[len(batches)-1][0])].FileInfo
 			l.Info(
 				"Test_DB_File_ProcessBatchRequestWorkflow - time taken",
 				slog.Any("time-taken", fmt.Sprintf("%dms", timeTaken.Milliseconds())),

@@ -21,8 +21,8 @@ const (
 var ErrInvalidBatchSize = errors.New(ERR_INVALID_BATCH_SIZE)
 var ErrorInvalidBatchSize = temporal.NewApplicationErrorWithCause(ERR_INVALID_BATCH_SIZE, ERR_INVALID_BATCH_SIZE, ErrInvalidBatchSize)
 
-// ProcessBatchRequestWorkflow processes an entity records csv file for type: AGENT, PRINCIPAL & FILING
-// retiries for configured number of times on failures exculding configuration errors
+// ProcessBatchRequestWorkflow processes local/cloud csv file or a db file in batches,
+// re-tries for configured number of times on retryable failures
 func ProcessBatchRequestWorkflow(ctx workflow.Context, req *BatchRequest) (*BatchRequest, error) {
 	l := workflow.GetLogger(ctx)
 	l.Debug(
