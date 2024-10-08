@@ -39,15 +39,15 @@ func (db *SQLLiteDBClient) ReadData(ctx context.Context, fileSrc bo.FileSource, 
 	return nil, 0, fmt.Errorf("%s table not found", fileSrc.FileName)
 }
 
-func (db *SQLLiteDBClient) HandleData(ctx context.Context, fileSrc bo.FileSource, data interface{}) (<-chan interface{}, <-chan error, error) {
+func (db *SQLLiteDBClient) HandleData(ctx context.Context, fileSrc bo.FileSource, start int64, data interface{}) (<-chan bo.Result, <-chan error, error) {
 	if fileSrc.FileName == "agent" {
 		recs, ok := data.([]Agent)
 		if !ok {
-			return nil, nil, fmt.Errorf("invalid data format")
+			return nil, nil, ErrInvalidData
 		}
 
 		// Create a channel to stream the records and errors
-		recStream, errStream := make(chan interface{}), make(chan error)
+		recStream, errStream := make(chan bo.Result), make(chan error)
 
 		go func() {
 			defer func() {
@@ -55,9 +55,13 @@ func (db *SQLLiteDBClient) HandleData(ctx context.Context, fileSrc bo.FileSource
 				close(errStream)
 			}()
 
-			for _, rec := range recs {
+			for i, rec := range recs {
 				// Process DB record
-				recStream <- rec
+				recStream <- bo.Result{
+					Start:  start + int64(i),
+					End:    start + int64(i+1),
+					Result: rec,
+				}
 			}
 
 		}()
@@ -86,6 +90,10 @@ func (db *SQLLiteDBClient) FetchEntityAgentRecords(ctx context.Context, offset, 
 		return nil, err
 	}
 	return agents, nil
+}
+
+func (db *SQLLiteDBClient) InsertAgentRecord(ctx context.Context, record map[string]interface{}) (sql.Result, error) {
+	return db.InsertEntityRecord(ctx, "agent", record)
 }
 
 func (db *SQLLiteDBClient) InsertEntityRecord(ctx context.Context, table string, record map[string]interface{}) (sql.Result, error) {
@@ -146,3 +154,14 @@ type Agent struct {
 	LastName   string `db:"last_name"`
 	AgentType  string `db:"agent_type"`
 }
+
+var AgentSchema = `
+	DROP TABLE IF EXISTS agent;
+	CREATE TABLE agent (
+		entity_id   INTEGER PRIMARY KEY,
+		entity_name VARCHAR(250) DEFAULT '',
+		first_name  VARCHAR(80)  DEFAULT '',
+		last_name   VARCHAR(80)  DEFAULT '',
+		agent_type  VARCHAR(250) DEFAULT ''
+	);
+	`

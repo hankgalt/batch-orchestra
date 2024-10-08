@@ -21,7 +21,7 @@ func TestSQLLiteDBClient(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	res := dbClient.ExecuteSchema(AgentSchema)
+	res := dbClient.ExecuteSchema(clients.AgentSchema)
 	n, err := res.LastInsertId()
 	require.NoError(t, err)
 	require.Equal(t, int64(0), n)
@@ -65,13 +65,13 @@ func TestSQLLiteDBClient(t *testing.T) {
 	require.Equal(t, true, ok)
 	require.Equal(t, int64(len(recs)), n)
 
-	recStream, errStream, err := dbClient.HandleData(ctx, reqFile, data)
+	recStream, errStream, err := dbClient.HandleData(ctx, reqFile, int64(0), data)
 	require.NoError(t, err)
 
 	processDBRecordStream(t, ctx, recStream, errStream)
 }
 
-func processDBRecordStream(t *testing.T, ctx context.Context, recStream <-chan interface{}, errStream <-chan error) {
+func processDBRecordStream(t *testing.T, ctx context.Context, recStream <-chan bo.Result, errStream <-chan error) {
 	recCnt := 0
 	errCnt := 0
 
@@ -85,7 +85,7 @@ func processDBRecordStream(t *testing.T, ctx context.Context, recStream <-chan i
 			if ok {
 				recCnt++
 
-				val, ok := rec.(clients.Agent)
+				val, ok := rec.Result.(clients.Agent)
 				require.Equal(t, ok, true)
 
 				fmt.Printf("record# %d, record: %v\n", recCnt, val)

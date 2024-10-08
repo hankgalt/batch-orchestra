@@ -2,6 +2,7 @@ package clients
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,6 +10,14 @@ import (
 
 	"cloud.google.com/go/storage"
 	bo "github.com/hankgalt/batch-orchestra"
+)
+
+const (
+	ERR_MISSING_BUCKET = "error missing bucket"
+)
+
+var (
+	ErrMissingBucket = errors.New(ERR_MISSING_BUCKET)
 )
 
 type CloudStorageClientConfig struct {
@@ -40,7 +49,7 @@ func NewCloudCSVFileClient(cfg CloudStorageClientConfig) (*CloudCSVFileClient, e
 	os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", cfg.CredsPath)
 	client, err := storage.NewClient(context.Background())
 	if err != nil {
-		return nil, fmt.Errorf("error creating cloud storage client")
+		return nil, err
 	}
 
 	return &CloudCSVFileClient{
@@ -50,11 +59,11 @@ func NewCloudCSVFileClient(cfg CloudStorageClientConfig) (*CloudCSVFileClient, e
 
 func (fl *CloudCSVFileClient) ReadData(ctx context.Context, fileInfo bo.FileSource, offset, limit int64) (interface{}, int64, error) {
 	if fileInfo.FileName == "" {
-		return nil, 0, fmt.Errorf("error file name missing")
+		return nil, 0, ErrMissingFileName
 	}
 
 	if fileInfo.Bucket == "" {
-		return nil, 0, fmt.Errorf("error storage bucket name missing")
+		return nil, 0, ErrMissingBucket
 	}
 
 	fPath := fileInfo.FileName
@@ -77,7 +86,7 @@ func (fl *CloudCSVFileClient) ReadData(ctx context.Context, fileInfo bo.FileSour
 	rcReadAt := &GCPStorageReadAtAdaptor{rc}
 	defer func() {
 		if err := rcReadAt.Reader.Close(); err != nil {
-			fmt.Printf("error closing cloud file reader - file %s, err %v\n", fPath, err)
+			fmt.Printf("LocalCSVFileClient:ReadData - error closing cloud file reader - file %s, err %v\n", fPath, err)
 		}
 	}()
 

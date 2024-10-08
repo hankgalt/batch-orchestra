@@ -71,13 +71,13 @@ func TestLocalCSVFileClient(t *testing.T) {
 	}
 	require.Equal(t, true, int64(nextOffset) < batchSize)
 
-	recStream, errStream, err := fileClient.HandleData(ctx, reqFile, data)
+	recStream, errStream, err := fileClient.HandleData(ctx, reqFile, int64(0), data)
 	require.NoError(t, err)
 
 	processCSVStream(t, ctx, recStream, errStream)
 }
 
-func processCSVStream(t *testing.T, ctx context.Context, recStream <-chan interface{}, errStream <-chan error) {
+func processCSVStream(t *testing.T, ctx context.Context, recStream <-chan bo.Result, errStream <-chan error) {
 	// require.NoError(nil)
 	recCnt := 0
 	errCnt := 0
@@ -87,7 +87,7 @@ func processCSVStream(t *testing.T, ctx context.Context, recStream <-chan interf
 			if ok {
 				recCnt++
 
-				vals, ok := rec.([]string)
+				vals, ok := rec.Result.([]string)
 				require.Equal(t, ok, true)
 
 				fmt.Printf("record# %d, size: %d, record: %v\n", recCnt, len(vals), vals)
