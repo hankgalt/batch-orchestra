@@ -63,7 +63,6 @@ func (db *SQLLiteDBClient) HandleData(ctx context.Context, fileSrc bo.FileSource
 					Result: rec,
 				}
 			}
-
 		}()
 
 		return recStream, errStream, nil

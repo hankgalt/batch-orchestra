@@ -20,16 +20,6 @@ var (
 	ErrMissingBucket = errors.New(ERR_MISSING_BUCKET)
 )
 
-type CloudStorageClientConfig struct {
-	CredsPath string `json:"creds_path"`
-}
-
-type CloudCSVFileClient struct {
-	client *storage.Client
-	bo.ChunkReader
-	CSVFileDataHandler
-}
-
 type GCPStorageReadAtAdaptor struct {
 	Reader *storage.Reader
 }
@@ -43,6 +33,16 @@ func (ra *GCPStorageReadAtAdaptor) ReadAt(p []byte, off int64) (n int, err error
 
 	// Read the requested data
 	return ra.Reader.Read(p)
+}
+
+type CloudStorageClientConfig struct {
+	CredsPath string `json:"creds_path"`
+}
+
+type CloudCSVFileClient struct {
+	client *storage.Client
+	bo.ChunkReader
+	CSVFileDataHandler
 }
 
 func NewCloudCSVFileClient(cfg CloudStorageClientConfig) (*CloudCSVFileClient, error) {

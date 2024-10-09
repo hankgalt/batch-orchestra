@@ -52,7 +52,7 @@ type FileInfo struct {
 type BatchRequest struct {
 	MaxBatches int
 	BatchSize  int32
-	Source     *FileSource // or DBSource
+	Source     *FileSource
 	Batches    map[string]*Batch
 }
 

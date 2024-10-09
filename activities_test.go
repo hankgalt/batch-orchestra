@@ -19,8 +19,6 @@ import (
 )
 
 const (
-	TEST_DIR         string = "data"
-	DATA_PATH        string = "scheduler"
 	TABLE_NAME_1     string = "agent"
 	LIVE_FILE_NAME_1 string = "Agents-sm.csv"
 )
@@ -33,16 +31,24 @@ const (
 	ProcessBatchActivityAlias  string = "process-batch-activity-alias"
 )
 
-type CSVBatchActivitiesTestSuite struct {
+type BatchActivitiesTestSuite struct {
 	suite.Suite
 	testsuite.WorkflowTestSuite
 }
 
 func TestCSVBatchActivitiesTestSuite(t *testing.T) {
-	suite.Run(t, new(CSVBatchActivitiesTestSuite))
+	suite.Run(t, new(BatchActivitiesTestSuite))
 }
 
-func (s *CSVBatchActivitiesTestSuite) Test_LocalActivity() {
+func (s *BatchActivitiesTestSuite) SetupTest() {
+	// get test logger
+	l := getTestLogger()
+
+	// set environment logger
+	s.SetLogger(l)
+}
+
+func (s *BatchActivitiesTestSuite) Test_LocalActivity() {
 	localActivityFn := func(ctx context.Context, name string) (string, error) {
 		return "hello " + name, nil
 	}
@@ -57,7 +63,7 @@ func (s *CSVBatchActivitiesTestSuite) Test_LocalActivity() {
 	s.Equal("hello local_activity", laResult)
 }
 
-func (s *CSVBatchActivitiesTestSuite) Test_ActivityRegistration() {
+func (s *BatchActivitiesTestSuite) Test_ActivityRegistration() {
 	activityFn := func(msg string) (string, error) {
 		return msg, nil
 	}
@@ -80,12 +86,8 @@ func (s *CSVBatchActivitiesTestSuite) Test_ActivityRegistration() {
 	s.Equal(input, output)
 }
 
-func (s *CSVBatchActivitiesTestSuite) Test_Local_File_GetCSVHeadersActivity() {
-	// get test logger
-	l := getTestLogger()
-
-	// set environment logger
-	s.SetLogger(l)
+func (s *BatchActivitiesTestSuite) Test_Local_File_GetCSVHeadersActivity() {
+	l := s.GetLogger()
 
 	// get test environment
 	env := s.NewTestActivityEnvironment()
@@ -102,10 +104,12 @@ func (s *CSVBatchActivitiesTestSuite) Test_Local_File_GetCSVHeadersActivity() {
 		BackgroundActivityContext: ctx,
 	})
 
+	testCfg := getTestConfig()
+
 	batchSize := int64(400)
 
 	s.Run("valid file", func() {
-		filePath := fmt.Sprintf("%s/%s", TEST_DIR, DATA_PATH)
+		filePath := fmt.Sprintf("%s/%s", testCfg.dir, testCfg.filePath)
 		req := &bo.FileInfo{
 			FileSource: bo.FileSource{
 				FileName: LIVE_FILE_NAME_1,
@@ -124,7 +128,7 @@ func (s *CSVBatchActivitiesTestSuite) Test_Local_File_GetCSVHeadersActivity() {
 	})
 
 	s.Run("missing file name", func() {
-		filePath := fmt.Sprintf("%s/%s", TEST_DIR, DATA_PATH)
+		filePath := fmt.Sprintf("%s/%s", testCfg.dir, testCfg.filePath)
 		req := &bo.FileInfo{
 			FileSource: bo.FileSource{
 				FileName: "",
@@ -146,12 +150,8 @@ func (s *CSVBatchActivitiesTestSuite) Test_Local_File_GetCSVHeadersActivity() {
 	})
 }
 
-func (s *CSVBatchActivitiesTestSuite) Test_Cloud_File_GetCSVHeadersActivity() {
-	// get test logger
-	l := getTestLogger()
-
-	// set environment logger
-	s.SetLogger(l)
+func (s *BatchActivitiesTestSuite) Test_Cloud_File_GetCSVHeadersActivity() {
+	l := s.GetLogger()
 
 	// get test environment
 	env := s.NewTestActivityEnvironment()
@@ -184,7 +184,7 @@ func (s *CSVBatchActivitiesTestSuite) Test_Cloud_File_GetCSVHeadersActivity() {
 		req := &bo.FileInfo{
 			FileSource: bo.FileSource{
 				FileName: LIVE_FILE_NAME_1,
-				FilePath: DATA_PATH,
+				FilePath: testCfg.filePath,
 				Bucket:   testCfg.bucket,
 			},
 			FileType: bo.CLOUD_CSV,
@@ -203,7 +203,7 @@ func (s *CSVBatchActivitiesTestSuite) Test_Cloud_File_GetCSVHeadersActivity() {
 		req := &bo.FileInfo{
 			FileSource: bo.FileSource{
 				FileName: "",
-				FilePath: DATA_PATH,
+				FilePath: testCfg.filePath,
 				Bucket:   testCfg.bucket,
 			},
 			FileType: bo.CLOUD_CSV,
@@ -225,7 +225,7 @@ func (s *CSVBatchActivitiesTestSuite) Test_Cloud_File_GetCSVHeadersActivity() {
 		req := &bo.FileInfo{
 			FileSource: bo.FileSource{
 				FileName: LIVE_FILE_NAME_1,
-				FilePath: DATA_PATH,
+				FilePath: testCfg.filePath,
 				Bucket:   "",
 			},
 			FileType: bo.CLOUD_CSV,
@@ -244,18 +244,16 @@ func (s *CSVBatchActivitiesTestSuite) Test_Cloud_File_GetCSVHeadersActivity() {
 	})
 }
 
-func (s *CSVBatchActivitiesTestSuite) Test_Mock_Client_GetCSVHeadersActivity() {
-	// get test logger
-	l := getTestLogger()
-
-	// set environment logger
-	s.SetLogger(l)
+func (s *BatchActivitiesTestSuite) Test_Mock_Client_GetCSVHeadersActivity() {
+	l := s.GetLogger()
 
 	// get test environment
 	env := s.NewTestActivityEnvironment()
 
 	// register GetCSVHeadersActivity
 	env.RegisterActivityWithOptions(bo.GetCSVHeadersActivity, activity.RegisterOptions{Name: GetCSVHeadersActivityAlias})
+
+	testCfg := getTestConfig()
 
 	// create file client
 	fileClient := getFileClientMock()
@@ -266,7 +264,7 @@ func (s *CSVBatchActivitiesTestSuite) Test_Mock_Client_GetCSVHeadersActivity() {
 		BackgroundActivityContext: ctx,
 	})
 
-	filePath := fmt.Sprintf("%s/%s", TEST_DIR, DATA_PATH)
+	filePath := fmt.Sprintf("%s/%s", testCfg.dir, testCfg.filePath)
 	req := &bo.FileInfo{
 		FileSource: bo.FileSource{
 			FileName: LIVE_FILE_NAME_1,
@@ -286,7 +284,7 @@ func (s *CSVBatchActivitiesTestSuite) Test_Mock_Client_GetCSVHeadersActivity() {
 	s.Equal(result.Start, int64(93))
 }
 
-func (s *CSVBatchActivitiesTestSuite) testGetCSVHeadersActivity(env *testsuite.TestActivityEnvironment, req *bo.FileInfo, batchSize int64) (*bo.FileInfo, error) {
+func (s *BatchActivitiesTestSuite) testGetCSVHeadersActivity(env *testsuite.TestActivityEnvironment, req *bo.FileInfo, batchSize int64) (*bo.FileInfo, error) {
 	resp, err := env.ExecuteActivity(bo.GetCSVHeadersActivity, req, batchSize)
 	if err != nil {
 		return nil, err
@@ -300,12 +298,8 @@ func (s *CSVBatchActivitiesTestSuite) testGetCSVHeadersActivity(env *testsuite.T
 	return &result, nil
 }
 
-func (s *CSVBatchActivitiesTestSuite) Test_Local_File_GetNextOffsetActivity() {
-	// get test logger
-	l := getTestLogger()
-
-	// set environment logger
-	s.SetLogger(l)
+func (s *BatchActivitiesTestSuite) Test_Local_File_GetNextOffsetActivity() {
+	l := s.GetLogger()
 
 	// get test environment
 	env := s.NewTestActivityEnvironment()
@@ -323,10 +317,11 @@ func (s *CSVBatchActivitiesTestSuite) Test_Local_File_GetNextOffsetActivity() {
 		BackgroundActivityContext: ctx,
 	})
 
+	testCfg := getTestConfig()
 	batchSize := int64(400)
 
 	s.Run("valid file", func() {
-		filePath := fmt.Sprintf("%s/%s", TEST_DIR, DATA_PATH)
+		filePath := fmt.Sprintf("%s/%s", testCfg.dir, testCfg.filePath)
 		req := &bo.FileInfo{
 			FileSource: bo.FileSource{
 				FileName: LIVE_FILE_NAME_1,
@@ -360,12 +355,8 @@ func (s *CSVBatchActivitiesTestSuite) Test_Local_File_GetNextOffsetActivity() {
 	})
 }
 
-func (s *CSVBatchActivitiesTestSuite) Test_Cloud_File_GetNextOffsetActivity() {
-	// get test logger
-	l := getTestLogger()
-
-	// set environment logger
-	s.SetLogger(l)
+func (s *BatchActivitiesTestSuite) Test_Cloud_File_GetNextOffsetActivity() {
+	l := s.GetLogger()
 
 	// get test environment
 	env := s.NewTestActivityEnvironment()
@@ -398,7 +389,7 @@ func (s *CSVBatchActivitiesTestSuite) Test_Cloud_File_GetNextOffsetActivity() {
 		req := &bo.FileInfo{
 			FileSource: bo.FileSource{
 				FileName: LIVE_FILE_NAME_1,
-				FilePath: DATA_PATH,
+				FilePath: testCfg.filePath,
 				Bucket:   testCfg.bucket,
 			},
 			FileType: bo.CLOUD_CSV,
@@ -429,12 +420,8 @@ func (s *CSVBatchActivitiesTestSuite) Test_Cloud_File_GetNextOffsetActivity() {
 	})
 }
 
-func (s *CSVBatchActivitiesTestSuite) Test_DB_File_GetNextOffsetActivity() {
-	// get test logger
-	l := getTestLogger()
-
-	// set environment logger
-	s.SetLogger(l)
+func (s *BatchActivitiesTestSuite) Test_DB_File_GetNextOffsetActivity() {
+	l := s.GetLogger()
 
 	// get test environment
 	env := s.NewTestActivityEnvironment()
@@ -488,12 +475,8 @@ func (s *CSVBatchActivitiesTestSuite) Test_DB_File_GetNextOffsetActivity() {
 	})
 }
 
-func (s *CSVBatchActivitiesTestSuite) Test_Mock_Client_GetNextOffsetActivity() {
-	// get test logger
-	l := getTestLogger()
-
-	// set environment logger
-	s.SetLogger(l)
+func (s *BatchActivitiesTestSuite) Test_Mock_Client_GetNextOffsetActivity() {
+	l := s.GetLogger()
 
 	// get test environment
 	env := s.NewTestActivityEnvironment()
@@ -505,13 +488,15 @@ func (s *CSVBatchActivitiesTestSuite) Test_Mock_Client_GetNextOffsetActivity() {
 	// create file client
 	fileClient := getFileClientMock()
 
+	testCfg := getTestConfig()
+
 	// set reader client in request context
 	ctx := context.WithValue(context.Background(), bo.ReaderClientContextKey, fileClient)
 	env.SetWorkerOptions(worker.Options{
 		BackgroundActivityContext: ctx,
 	})
 
-	filePath := fmt.Sprintf("%s/%s", TEST_DIR, DATA_PATH)
+	filePath := fmt.Sprintf("%s/%s", testCfg.dir, testCfg.filePath)
 	req := &bo.FileInfo{
 		FileSource: bo.FileSource{
 			FileName: LIVE_FILE_NAME_1,
@@ -546,7 +531,7 @@ func (s *CSVBatchActivitiesTestSuite) Test_Mock_Client_GetNextOffsetActivity() {
 	s.Equal(result.End, result.OffSets[len(result.OffSets)-1])
 }
 
-func (s *CSVBatchActivitiesTestSuite) testGetNextOffsetActivity(env *testsuite.TestActivityEnvironment, req *bo.FileInfo, batchSize int64) (*bo.FileInfo, error) {
+func (s *BatchActivitiesTestSuite) testGetNextOffsetActivity(env *testsuite.TestActivityEnvironment, req *bo.FileInfo, batchSize int64) (*bo.FileInfo, error) {
 	resp, err := env.ExecuteActivity(bo.GetNextOffsetActivity, req, batchSize)
 	if err != nil {
 		return nil, err
@@ -560,12 +545,8 @@ func (s *CSVBatchActivitiesTestSuite) testGetNextOffsetActivity(env *testsuite.T
 	return &result, nil
 }
 
-func (s *CSVBatchActivitiesTestSuite) Test_Local_File_ProcessBatchActivity() {
-	// get test logger
-	l := getTestLogger()
-
-	// set environment logger
-	s.SetLogger(l)
+func (s *BatchActivitiesTestSuite) Test_Local_File_ProcessBatchActivity() {
+	l := s.GetLogger()
 
 	// get test environment
 	env := s.NewTestActivityEnvironment()
@@ -586,8 +567,10 @@ func (s *CSVBatchActivitiesTestSuite) Test_Local_File_ProcessBatchActivity() {
 
 	batchSize := int64(400)
 
+	testCfg := getTestConfig()
+
 	s.Run("valid file", func() {
-		filePath := fmt.Sprintf("%s/%s", TEST_DIR, DATA_PATH)
+		filePath := fmt.Sprintf("%s/%s", testCfg.dir, testCfg.filePath)
 		req := &bo.FileInfo{
 			FileSource: bo.FileSource{
 				FileName: LIVE_FILE_NAME_1,
@@ -623,12 +606,8 @@ func (s *CSVBatchActivitiesTestSuite) Test_Local_File_ProcessBatchActivity() {
 	})
 }
 
-func (s *CSVBatchActivitiesTestSuite) Test_Cloud_File_ProcessBatchActivity() {
-	// get test logger
-	l := getTestLogger()
-
-	// set environment logger
-	s.SetLogger(l)
+func (s *BatchActivitiesTestSuite) Test_Cloud_File_ProcessBatchActivity() {
+	l := s.GetLogger()
 
 	// get test environment
 	env := s.NewTestActivityEnvironment()
@@ -662,7 +641,7 @@ func (s *CSVBatchActivitiesTestSuite) Test_Cloud_File_ProcessBatchActivity() {
 		req := &bo.FileInfo{
 			FileSource: bo.FileSource{
 				FileName: LIVE_FILE_NAME_1,
-				FilePath: DATA_PATH,
+				FilePath: testCfg.filePath,
 				Bucket:   testCfg.bucket,
 			},
 			FileType: bo.CLOUD_CSV,
@@ -695,12 +674,8 @@ func (s *CSVBatchActivitiesTestSuite) Test_Cloud_File_ProcessBatchActivity() {
 	})
 }
 
-func (s *CSVBatchActivitiesTestSuite) Test_DB_File_ProcessBatchActivity() {
-	// get test logger
-	l := getTestLogger()
-
-	// set environment logger
-	s.SetLogger(l)
+func (s *BatchActivitiesTestSuite) Test_DB_File_ProcessBatchActivity() {
+	l := s.GetLogger()
 
 	// get test environment
 	env := s.NewTestActivityEnvironment()
@@ -754,12 +729,8 @@ func (s *CSVBatchActivitiesTestSuite) Test_DB_File_ProcessBatchActivity() {
 	})
 }
 
-func (s *CSVBatchActivitiesTestSuite) Test_Mock_Client_ProcessBatchActivity() {
-	// get test logger
-	l := getTestLogger()
-
-	// set environment logger
-	s.SetLogger(l)
+func (s *BatchActivitiesTestSuite) Test_Mock_Client_ProcessBatchActivity() {
+	l := s.GetLogger()
 
 	// get test environment
 	env := s.NewTestActivityEnvironment()
@@ -772,13 +743,15 @@ func (s *CSVBatchActivitiesTestSuite) Test_Mock_Client_ProcessBatchActivity() {
 	// create file client
 	fileClient := getFileClientMock()
 
+	testCfg := getTestConfig()
+
 	// set reader client in request context
 	ctx := context.WithValue(context.Background(), bo.ReaderClientContextKey, fileClient)
 	env.SetWorkerOptions(worker.Options{
 		BackgroundActivityContext: ctx,
 	})
 
-	filePath := fmt.Sprintf("%s/%s", TEST_DIR, DATA_PATH)
+	filePath := fmt.Sprintf("%s/%s", testCfg.dir, testCfg.filePath)
 	req := &bo.FileInfo{
 		FileSource: bo.FileSource{
 			FileName: LIVE_FILE_NAME_1,
@@ -815,7 +788,7 @@ func (s *CSVBatchActivitiesTestSuite) Test_Mock_Client_ProcessBatchActivity() {
 	// s.Equal(3, len(batchRes.Records))
 }
 
-func (s *CSVBatchActivitiesTestSuite) testProcessBatchActivity(env *testsuite.TestActivityEnvironment, req *bo.Batch) (*bo.Batch, error) {
+func (s *BatchActivitiesTestSuite) testProcessBatchActivity(env *testsuite.TestActivityEnvironment, req *bo.Batch) (*bo.Batch, error) {
 	resp, err := env.ExecuteActivity(bo.ProcessBatchActivity, req)
 	if err != nil {
 		return nil, err
@@ -852,17 +825,20 @@ type testConfig struct {
 	dir       string
 	bucket    string
 	credsPath string
+	filePath  string
 }
 
 func getTestConfig() testConfig {
 	dataDir := os.Getenv("DATA_DIR")
 	credsPath := os.Getenv("CREDS_PATH")
 	bktName := os.Getenv("BUCKET_NAME")
+	filePath := os.Getenv("FILE_PATH")
 
 	return testConfig{
 		dir:       dataDir,
 		bucket:    bktName,
 		credsPath: credsPath,
+		filePath:  filePath,
 	}
 }
 

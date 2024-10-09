@@ -22,6 +22,7 @@ const (
 	ProcessBatchActivityName  = "ProcessBatchActivity"
 )
 
+// Error messages used throughout the activities
 const (
 	ERR_MISSING_FILE_NAME       = "error missing file name"
 	ERR_READING_FILE            = "error reading file"
@@ -35,6 +36,7 @@ const (
 	ERR_UNKNOWN_FILE_TYPE     = "error unknown file type"
 )
 
+// Standard Go errors for internal use
 var (
 	ErrMissingFileName      = errors.New(ERR_MISSING_FILE_NAME)
 	ErrMissingStartOffset   = errors.New(ERR_MISSING_START_OFFSET)
@@ -45,6 +47,7 @@ var (
 	ErrMissingReaderClient = errors.New(ERR_MISSING_READER_CLIENT)
 )
 
+// Temporal application errors for workflow activities
 var (
 	ErrorMissingFileName      = temporal.NewApplicationErrorWithCause(ERR_MISSING_FILE_NAME, ERR_MISSING_FILE_NAME, ErrMissingFileName)
 	ErrorMissingStartOffset   = temporal.NewApplicationErrorWithCause(ERR_MISSING_START_OFFSET, ERR_MISSING_START_OFFSET, ErrMissingStartOffset)
@@ -56,53 +59,65 @@ var (
 )
 
 // GetCSVHeadersActivity populates state with headers info for a CSV file
+// This activity reads the headers of a CSV file and updates the FileInfo struct with the header information.
+// It performs several checks to ensure the required information is present before proceeding.
 func GetCSVHeadersActivity(ctx context.Context, req *FileInfo, batchSize int64) (*FileInfo, error) {
 	l := activity.GetLogger(ctx)
 	l.Debug("GetCSVHeadersActivity - started", slog.Any("file-info", req), slog.Int64("batch-size", batchSize))
 
-	// check for file name
+	// check if file name is provided
 	if req.FileName == "" {
 		l.Error(ERR_MISSING_FILE_NAME)
 		return req, ErrorMissingFileName
 	}
 
-	// check for cloud bucket
+	// check if cloud bucket is provided for cloud files
 	if req.FileType == CLOUD_CSV && req.Bucket == "" {
 		l.Error(ERR_MISSING_CLOUD_BUCKET)
 		return req, ErrorMissingCloudBucket
 	}
 
-	// get reader client from context
+	// retrieve reader client from context
 	dataSrc := ctx.Value(ReaderClientContextKey).(BatchRequestProcessor)
 	if dataSrc == nil {
 		l.Error(ERR_MISSING_READER_CLIENT)
 		return req, ErrorMissingReaderClient
 	}
 
-	data, _, err := dataSrc.ReadData(ctx, req.FileSource, int64(0), batchSize)
-	if err != nil {
-		if err != io.EOF {
+	select {
+	case <-ctx.Done():
+		l.Error("GetCSVHeadersActivity - context cancelled or timed out", slog.Any("error", ctx.Err()))
+		return req, ctx.Err()
+	default:
+		// Read data from the source starting at offset 0
+		data, _, err := dataSrc.ReadData(ctx, req.FileSource, int64(0), batchSize)
+		if err != nil {
+			if err != io.EOF {
+				return req, temporal.NewApplicationErrorWithCause(ERR_READING_FILE, ERR_READING_FILE, err)
+			}
+		}
+
+		// Create a buffer and CSV reader to read the headers
+		buffer := bytes.NewBuffer(data.([]byte))
+		csvReader := csv.NewReader(buffer)
+		csvReader.Comma = '|'
+		csvReader.FieldsPerRecord = -1
+
+		// Read the headers from the CSV file
+		headers, err := csvReader.Read()
+		if err != nil {
+			l.Error(ERR_READING_FILE, slog.Any("error", err), slog.String("file", req.FileName))
 			return req, temporal.NewApplicationErrorWithCause(ERR_READING_FILE, ERR_READING_FILE, err)
 		}
+		req.Start = csvReader.InputOffset()
+		req.Headers = headers
+
+		return req, nil
 	}
-
-	buffer := bytes.NewBuffer(data.([]byte))
-	csvReader := csv.NewReader(buffer)
-	csvReader.Comma = '|'
-	csvReader.FieldsPerRecord = -1
-
-	headers, err := csvReader.Read()
-	if err != nil {
-		l.Error(ERR_READING_FILE, slog.Any("error", err), slog.String("file", req.FileName))
-		return req, temporal.NewApplicationErrorWithCause(ERR_READING_FILE, ERR_READING_FILE, err)
-	}
-	req.Start = csvReader.InputOffset()
-	req.Headers = headers
-
-	return req, nil
 }
 
 // GetNextOffsetActivity populates state with next offset for given data file.
+// This activity calculates the next offset for reading data from a file based on the current state and batch size.
 func GetNextOffsetActivity(ctx context.Context, req *FileInfo, batchSize int64) (*FileInfo, error) {
 	l := activity.GetLogger(ctx)
 	l.Debug(
@@ -114,7 +129,7 @@ func GetNextOffsetActivity(ctx context.Context, req *FileInfo, batchSize int64) 
 		slog.Any("end", req.End),
 	)
 
-	// check for file name
+	// Check if the file name is provided
 	if req.FileName == "" {
 		l.Error(ERR_MISSING_FILE_NAME)
 		return req, ErrorMissingFileName
@@ -144,7 +159,7 @@ func GetNextOffsetActivity(ctx context.Context, req *FileInfo, batchSize int64) 
 		return req, ErrorMissingReaderClient
 	}
 
-	// setup starting sample size
+	// setup batch size
 	bufferSize := req.Start
 	if batchSize > 0 {
 		bufferSize = batchSize
@@ -153,61 +168,70 @@ func GetNextOffsetActivity(ctx context.Context, req *FileInfo, batchSize int64) 
 		req.OffSets = []int64{req.Start}
 	}
 
-	// starting offset
+	// calculate starting offset
 	sOffset := req.OffSets[len(req.OffSets)-1]
 	l.Debug("GetNextOffsetActivity - reading next chunk", slog.String("file-name", req.FileName), slog.Any("file-type", req.FileType), slog.Int64("offset", sOffset), slog.Int64("buffer-size", bufferSize))
 
-	// read data
-	buf, n, err := dataSrc.ReadData(ctx, req.FileSource, sOffset, bufferSize)
-	if err != nil {
-		l.Error(ERR_READING_FILE, slog.Any("error", err), slog.String("file", req.FileName))
-		return req, temporal.NewApplicationErrorWithCause(ERR_READING_FILE, ERR_READING_FILE, err)
-	}
-
-	var nextOffset int64
-	if req.FileType == CSV || req.FileType == CLOUD_CSV {
-		i := bytes.LastIndex(buf.([]byte), []byte{'\n'})
-		if i > 0 && n == batchSize {
-			nextOffset = sOffset + int64(i) + 1
-		} else {
-			nextOffset = sOffset + n
+	select {
+	case <-ctx.Done():
+		l.Error("GetNextOffsetActivity - context cancelled or timed out", slog.Any("error", ctx.Err()))
+		return req, ctx.Err()
+	default:
+		// read data
+		buf, n, err := dataSrc.ReadData(ctx, req.FileSource, sOffset, bufferSize)
+		if err != nil {
+			l.Error(ERR_READING_FILE, slog.Any("error", err), slog.String("file", req.FileName))
+			return req, temporal.NewApplicationErrorWithCause(ERR_READING_FILE, ERR_READING_FILE, err)
 		}
-	} else if req.FileType == DB_CURSOR {
-		nextOffset = sOffset + n
-	} else {
-		return req, ErrorUnknownFileType
+
+		// calculate next offset
+		var nextOffset int64
+		if req.FileType == CSV || req.FileType == CLOUD_CSV {
+			i := bytes.LastIndex(buf.([]byte), []byte{'\n'})
+			if i > 0 && n == batchSize {
+				nextOffset = sOffset + int64(i) + 1
+			} else {
+				nextOffset = sOffset + n
+			}
+		} else if req.FileType == DB_CURSOR {
+			nextOffset = sOffset + n
+		} else {
+			return req, ErrorUnknownFileType
+		}
+
+		// update request offsets
+		req.OffSets = append(req.OffSets, nextOffset)
+
+		// set end of file is last batch
+		l.Debug("GetNextOffsetActivity - done", slog.String("file-name", req.FileName), slog.Any("file-type", req.FileType), slog.Int64("next-offset", nextOffset))
+		if n < batchSize {
+			l.Debug("GetNextOffsetActivity - last offset", slog.String("file-name", req.FileName), slog.Any("file-type", req.FileType))
+			req.End = nextOffset
+		}
+
+		return req, nil
 	}
-
-	req.OffSets = append(req.OffSets, nextOffset)
-
-	l.Debug("GetNextOffsetActivity - done", slog.String("file-name", req.FileName), slog.Any("file-type", req.FileType), slog.Int64("next-offset", nextOffset))
-	if n < batchSize {
-		l.Debug("GetNextOffsetActivity - last offset", slog.String("file-name", req.FileName), slog.Any("file-type", req.FileType))
-		req.End = nextOffset
-	}
-
-	return req, nil
 }
 
-// ProcessBatchActivity processes records within given start & end indexes,
-// resolves file path using configured/default data directory path
+// ProcessBatchActivity processes a batch of data from a file,
+// by passing the batch to reader client data handler.
 func ProcessBatchActivity(ctx context.Context, req *Batch) (*Batch, error) {
 	l := activity.GetLogger(ctx)
 	l.Debug("ProcessBatchActivity - started", slog.String("file-name", req.FileInfo.FileName), slog.Int64("start", req.Start), slog.Int64("end", req.End))
 
-	// check for file name
+	// Check if the file name is provided
 	if req.FileInfo.FileName == "" {
 		l.Error(ERR_MISSING_FILE_NAME)
 		return req, ErrorMissingFileName
 	}
 
-	// check for start, end
+	// Check if the batch start and end offsets are provided
 	if req.Start >= req.End || req.End <= 0 {
 		l.Error(ERR_MISSING_BATCH_START_END)
 		return req, ErrorMissingBatchStartEnd
 	}
 
-	// get reader client from context
+	// Retrieve the reader client from the context
 	dataSrc := ctx.Value(ReaderClientContextKey).(BatchRequestProcessor)
 	if dataSrc == nil {
 		l.Error(ERR_MISSING_READER_CLIENT)
@@ -222,7 +246,7 @@ func ProcessBatchActivity(ctx context.Context, req *Batch) (*Batch, error) {
 		req.Records = map[string]*Record{}
 	}
 
-	// read data
+	// Read data from the source based on the start and end offsets
 	buf, _, err := dataSrc.ReadData(ctx, req.FileSource, req.Start, req.End-req.Start)
 	if err != nil {
 		req.Error = err
@@ -241,7 +265,7 @@ func ProcessBatchActivity(ctx context.Context, req *Batch) (*Batch, error) {
 		select {
 		case rec, ok := <-recStream:
 			if ok {
-				// assign record ID
+				// assign a unique record ID
 				recordId := fmt.Sprintf("%s-%d", req.FileName, rec.Start)
 
 				// update record state
@@ -258,12 +282,14 @@ func ProcessBatchActivity(ctx context.Context, req *Batch) (*Batch, error) {
 			}
 		case err, ok := <-errStream:
 			if ok {
+				// Log the error from the error stream
 				l.Debug("ProcessStoreBatchActivity - error processing record", slog.Any("error", err))
 			} else {
 				// error stream closed
 				return req, nil
 			}
 		case <-ctx.Done():
+			// Context done, return the context error
 			return req, ctx.Err()
 		}
 	}
