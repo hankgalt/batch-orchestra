@@ -98,6 +98,7 @@ func GetCSVHeadersActivity(ctx context.Context, req *FileInfo, batchSize int64) 
 		}
 
 		// Create a buffer and CSV reader to read the headers
+		// TODO handle type casting error
 		buffer := bytes.NewBuffer(data.([]byte))
 		csvReader := csv.NewReader(buffer)
 		csvReader.Comma = '|'
@@ -187,6 +188,7 @@ func GetNextOffsetActivity(ctx context.Context, req *FileInfo, batchSize int64) 
 		// calculate next offset
 		var nextOffset int64
 		if req.FileType == CSV || req.FileType == CLOUD_CSV {
+			// TODO handle type casting error
 			i := bytes.LastIndex(buf.([]byte), []byte{'\n'})
 			if i > 0 && n == batchSize {
 				nextOffset = sOffset + int64(i) + 1
@@ -201,6 +203,9 @@ func GetNextOffsetActivity(ctx context.Context, req *FileInfo, batchSize int64) 
 
 		// update request offsets
 		req.OffSets = append(req.OffSets, nextOffset)
+
+		// TODO update to set data buffer into state for batch activity to read from
+		// req.datas[req.FileName] = buf // pointer or actual buffer?
 
 		// set end of file is last batch
 		l.Debug("GetNextOffsetActivity - done", slog.String("file-name", req.FileName), slog.Any("file-type", req.FileType), slog.Int64("next-offset", nextOffset))
@@ -218,6 +223,8 @@ func GetNextOffsetActivity(ctx context.Context, req *FileInfo, batchSize int64) 
 func ProcessBatchActivity(ctx context.Context, req *Batch) (*Batch, error) {
 	l := activity.GetLogger(ctx)
 	l.Debug("ProcessBatchActivity - started", slog.String("file-name", req.FileInfo.FileName), slog.Int64("start", req.Start), slog.Int64("end", req.End))
+
+	// TODO handle activity heartbeating
 
 	// Check if the file name is provided
 	if req.FileInfo.FileName == "" {
@@ -254,6 +261,19 @@ func ProcessBatchActivity(ctx context.Context, req *Batch) (*Batch, error) {
 		return req, temporal.NewApplicationErrorWithCause(ERR_READING_FILE, ERR_READING_FILE, err)
 	}
 
+	// TODO update to get data buffer from state instead of reading from source
+	// buf, ok := req.datas[req.BatchID]
+	// var err error
+	// if !ok {
+	// 	buf, _, err = dataSrc.ReadData(ctx, req.FileSource, req.Start, req.End-req.Start)
+	// 	if err != nil {
+	// 		req.Error = err
+	// 		l.Error(ERR_READING_FILE, slog.Any("error", err), slog.String("file", req.FileName))
+	// 		return req, temporal.NewApplicationErrorWithCause(ERR_READING_FILE, ERR_READING_FILE, err)
+	// 	}
+	// }
+	// delete(req.datas, req.BatchID) // deferred? preserve for retries?
+
 	recStream, errStream, err := dataSrc.HandleData(ctx, req.FileSource, req.Start, buf)
 	if err != nil {
 		req.Error = err
@@ -269,6 +289,7 @@ func ProcessBatchActivity(ctx context.Context, req *Batch) (*Batch, error) {
 				recordId := fmt.Sprintf("%s-%d", req.FileName, rec.Start)
 
 				// update record state
+				// TODO process record result with reader's HandleRecord method
 				l.Debug("ProcessStoreBatchActivity - batch file record", slog.String("file-name", req.FileName), slog.Int64("start", rec.Start), slog.Any("record", rec.Result))
 				req.Records[recordId] = &Record{
 					RecordID: recordId,

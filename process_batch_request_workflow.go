@@ -103,6 +103,8 @@ func processBatchRequest(ctx workflow.Context, req *BatchRequest) (*BatchRequest
 		slog.String("bucket", req.Source.Bucket),
 	)
 
+	// TODO handle workflow state query
+
 	if req.MaxBatches < 2 {
 		req.MaxBatches = 2
 	}
@@ -130,6 +132,17 @@ func processBatchRequest(ctx workflow.Context, req *BatchRequest) (*BatchRequest
 		FileSource: *req.Source,
 		FileType:   fileType,
 	}
+
+	// TODO update file info from state
+	// if len(req.Batches) > 0 {
+	// 	max := int64(0)
+	// 	for _, b := range req.Batches {
+	// 		if b.Start > max {
+	// 			max = b.Start
+	// 		}
+	// 	}
+	// 	fileInfo = req.Batches[fmt.Sprintf("%s-%d", req.Source.FileName, max)].FileInfo
+	// }
 
 	batchSize := int64(req.BatchSize)
 
@@ -159,14 +172,12 @@ func processBatchRequest(ctx workflow.Context, req *BatchRequest) (*BatchRequest
 		}
 	}
 
-	fmt.Println()
 	l.Debug(
 		"processBatchRequest - built headers, fetching next offset",
 		slog.String("file", fileInfo.FileName),
 		slog.Any("headers", fileInfo.Headers),
 		slog.Any("start", fileInfo.Start),
 	)
-	fmt.Println()
 
 	// get next batch offset
 	fileInfo, err = ExecuteGetNextOffsetActivity(ctx, fileInfo, batchSize)
@@ -178,13 +189,11 @@ func processBatchRequest(ctx workflow.Context, req *BatchRequest) (*BatchRequest
 		)
 		return req, err
 	}
-	fmt.Println()
 	l.Debug(
 		"processBatchRequest - fetched next offset ",
 		slog.String("file", req.Source.FileName),
 		slog.Any("offsets", fileInfo.OffSets),
 	)
-	fmt.Println()
 
 	// initiate a new queue
 	q := list.New()
@@ -228,13 +237,11 @@ func processBatchRequest(ctx workflow.Context, req *BatchRequest) (*BatchRequest
 
 				req.Batches[nextBatReq.BatchID] = nextBatReq
 			} else {
-				fmt.Println()
 				l.Debug(
 					"processBatchRequest - fetched next offset ",
 					slog.String("file", req.Source.FileName),
 					slog.Any("offsets", fileInfo.OffSets),
 				)
-				fmt.Println()
 
 				// build next batch request
 				start, end := fileInfo.OffSets[len(fileInfo.OffSets)-2], fileInfo.OffSets[len(fileInfo.OffSets)-1]

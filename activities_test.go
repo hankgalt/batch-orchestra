@@ -49,6 +49,8 @@ func (s *BatchActivitiesTestSuite) SetupTest() {
 }
 
 func (s *BatchActivitiesTestSuite) Test_LocalActivity() {
+	l := s.GetLogger()
+
 	localActivityFn := func(ctx context.Context, name string) (string, error) {
 		return "hello " + name, nil
 	}
@@ -59,11 +61,13 @@ func (s *BatchActivitiesTestSuite) Test_LocalActivity() {
 	var laResult string
 	err = result.Get(&laResult)
 	s.NoError(err)
-	fmt.Println("Test_LocalActivity - local activity result: ", laResult)
+	l.Debug("Test_LocalActivity - local activity result", slog.Any("result", laResult))
 	s.Equal("hello local_activity", laResult)
 }
 
 func (s *BatchActivitiesTestSuite) Test_ActivityRegistration() {
+	l := s.GetLogger()
+
 	activityFn := func(msg string) (string, error) {
 		return msg, nil
 	}
@@ -82,7 +86,7 @@ func (s *BatchActivitiesTestSuite) Test_ActivityRegistration() {
 	s.NoError(err)
 	output = ""
 	encodedValue.Get(&output)
-	fmt.Println("Test_ActivityRegistration - output: ", output)
+	l.Debug("Test_ActivityRegistration - output: ", slog.Any("result", output))
 	s.Equal(input, output)
 }
 
@@ -806,7 +810,7 @@ func getTestLogger() *slog.Logger {
 	// create log level var
 	logLevel := &slog.LevelVar{}
 	// set log level
-	logLevel.Set(slog.LevelDebug)
+	logLevel.Set(slog.LevelInfo)
 	// create log handler options
 	opts := &slog.HandlerOptions{
 		Level: logLevel,
