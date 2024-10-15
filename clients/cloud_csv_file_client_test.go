@@ -1,24 +1,27 @@
 package clients_test
 
 import (
-	"bytes"
 	"context"
+	"log/slog"
 	"testing"
 
-	bo "github.com/hankgalt/batch-orchestra"
 	"github.com/hankgalt/batch-orchestra/clients"
 	"github.com/stretchr/testify/require"
 )
 
 func TestCloudCSVFileClient(t *testing.T) {
+	l := getTestLogger()
 	fileName := "Agents-sm.csv"
 	filePath := "scheduler"
-	batchSize := int64(600)
+	batchSize := int64(400)
 
 	testCfg := getTestConfig()
 
 	cscCfg := clients.CloudStorageClientConfig{
 		CredsPath: testCfg.credsPath,
+		FileName:  fileName,
+		FilePath:  filePath,
+		Bucket:    testCfg.bucket,
 	}
 
 	fileClient, err := clients.NewCloudCSVFileClient(cscCfg)
@@ -28,38 +31,54 @@ func TestCloudCSVFileClient(t *testing.T) {
 		require.NoError(t, err)
 	}()
 
-	reqFile := bo.FileSource{
-		FileName: fileName,
-		FilePath: filePath,
-		Bucket:   testCfg.bucket,
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	data, n, err := fileClient.ReadData(ctx, reqFile, int64(0), batchSize)
+	data, n, last, err := fileClient.ReadData(ctx, int64(0), batchSize)
 	require.NoError(t, err)
 
 	buf, ok := data.([]byte)
 	require.Equal(t, true, ok)
 
-	require.Equal(t, len(buf), int(batchSize))
-	require.Equal(t, n, batchSize)
+	l.Debug("TestCloudCSVFileClient", slog.Int64("n", n), slog.Int("len", len(buf)), slog.Any("last", last))
 
-	var nextOffset int64
-	i := 0
-	if data != nil {
-		i = bytes.LastIndex(data.([]byte), []byte{'\n'})
-	}
-	if i > 0 && n == batchSize {
-		nextOffset = int64(i) + 1
-	} else {
-		nextOffset = int64(n)
-	}
-	require.Equal(t, true, int64(nextOffset) < batchSize)
+	require.Equal(t, len(buf), int(n))
+	require.Equal(t, true, n < batchSize)
 
-	recStream, errStream, err := fileClient.HandleData(ctx, reqFile, int64(0), data)
+	recStream, errStream, err := fileClient.HandleData(ctx, int64(0), data)
 	require.NoError(t, err)
 
-	processCSVStream(t, ctx, recStream, errStream)
+	recordCount, errorCount := processCSVStream(t, ctx, recStream, errStream)
+
+	offset := n
+	i := 1
+	for !last {
+		// for !last {
+		data, n, last, err = fileClient.ReadData(ctx, offset, batchSize)
+		require.NoError(t, err)
+
+		buf, ok = data.([]byte)
+		require.Equal(t, true, ok)
+		l.Debug("TestCloudCSVFileClient", slog.Int64("n", n), slog.Int("len", len(buf)), slog.Any("last", last))
+
+		require.Equal(t, len(buf), int(n))
+		require.Equal(t, true, n < batchSize)
+
+		recStream, errStream, err := fileClient.HandleData(ctx, int64(0), data)
+		require.NoError(t, err)
+
+		recCount, errCount := processCSVStream(t, ctx, recStream, errStream)
+
+		recordCount += recCount
+		errorCount += errCount
+
+		offset += n
+
+		i++
+	}
+
+	l.Debug("TestCloudCSVFileClient", slog.Int("i", i), slog.Int("recordCount", recordCount), slog.Int("errorCount", errorCount))
+
+	require.Equal(t, recordCount, 26)
+	require.Equal(t, i, 10)
 }

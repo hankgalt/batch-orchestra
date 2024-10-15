@@ -11,18 +11,12 @@ func (c ContextKey) String() string {
 const ReaderClientContextKey = ContextKey("reader-client")
 const ReaderBucketContextKey = ContextKey("reader-bucket")
 
-type FileSource struct {
-	FileName string
-	FilePath string
-	Bucket   string
-}
-
 type ChunkReader interface {
-	ReadData(ctx context.Context, fileSrc FileSource, offset, limit int64) (interface{}, int64, error)
+	ReadData(ctx context.Context, offset, limit int64) (interface{}, int64, bool, error)
 }
 
 type ChunkHandler interface {
-	HandleData(ctx context.Context, fileSrc FileSource, start int64, data interface{}) (<-chan Result, <-chan error, error)
+	HandleData(ctx context.Context, start int64, data interface{}) (<-chan Result, <-chan error, error)
 }
 
 type BatchRequestProcessor interface {
@@ -30,29 +24,19 @@ type BatchRequestProcessor interface {
 	ChunkHandler
 }
 
-type FileType string
-
-const (
-	CSV       FileType = "CSV"
-	CLOUD_CSV FileType = "CLOUD_CSV"
-	DB_CURSOR FileType = "DB_CURSOR"
-)
-
 // in process state
 type FileInfo struct {
-	FileType FileType
-	FileSource
-	Headers []string
-	Start   int64
-	End     int64
-	OffSets []int64
+	FileName string
+	Start    int64
+	End      int64
+	OffSets  []int64
 }
 
 // batch request
 type BatchRequest struct {
 	MaxBatches int
 	BatchSize  int32
-	Source     *FileSource
+	FileName   string
 	Batches    map[string]*Batch
 }
 

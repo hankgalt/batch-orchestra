@@ -1,7 +1,9 @@
 package clients
 
 import (
+	"bytes"
 	"context"
+	"encoding/csv"
 	"errors"
 	"fmt"
 	"io"
@@ -37,15 +39,30 @@ func (ra *GCPStorageReadAtAdaptor) ReadAt(p []byte, off int64) (n int, err error
 
 type CloudStorageClientConfig struct {
 	CredsPath string `json:"creds_path"`
+	FileName  string `json:"file_name"`
+	FilePath  string `json:"file_path"`
+	Bucket    string `json:"bucket"`
 }
 
 type CloudCSVFileClient struct {
-	client *storage.Client
+	client  *storage.Client
+	source  *FileSource
+	headers []string
 	bo.ChunkReader
 	CSVFileDataHandler
 }
 
 func NewCloudCSVFileClient(cfg CloudStorageClientConfig) (*CloudCSVFileClient, error) {
+	// Check if the file name is provided
+	if cfg.FileName == "" {
+		return nil, ErrMissingFileName
+	}
+
+	// Check if the bucket is provided
+	if cfg.Bucket == "" {
+		return nil, ErrMissingBucket
+	}
+
 	os.Setenv("GOOGLE_APPLICATION_CREDENTIALS", cfg.CredsPath)
 	client, err := storage.NewClient(context.Background())
 	if err != nil {
@@ -54,49 +71,78 @@ func NewCloudCSVFileClient(cfg CloudStorageClientConfig) (*CloudCSVFileClient, e
 
 	return &CloudCSVFileClient{
 		client: client,
+		source: &FileSource{
+			FileName: cfg.FileName,
+			FilePath: cfg.FilePath,
+			Bucket:   cfg.Bucket,
+		},
 	}, nil
 }
 
-func (fl *CloudCSVFileClient) ReadData(ctx context.Context, fileInfo bo.FileSource, offset, limit int64) (interface{}, int64, error) {
-	if fileInfo.FileName == "" {
-		return nil, 0, ErrMissingFileName
+func (fl *CloudCSVFileClient) ReadData(ctx context.Context, offset, limit int64) (interface{}, int64, bool, error) {
+	if fl.source.FileName == "" {
+		return nil, 0, false, ErrMissingFileName
 	}
 
-	if fileInfo.Bucket == "" {
-		return nil, 0, ErrMissingBucket
+	if fl.source.Bucket == "" {
+		return nil, 0, false, ErrMissingBucket
 	}
 
-	fPath := fileInfo.FileName
-	if fileInfo.FilePath != "" {
-		fPath = filepath.Join(fileInfo.FilePath, fileInfo.FileName)
+	fPath := fl.source.FileName
+	if fl.source.FilePath != "" {
+		fPath = filepath.Join(fl.source.FilePath, fl.source.FileName)
 	}
 
 	// check for object existence
-	obj := fl.client.Bucket(fileInfo.Bucket).Object(fPath)
+	obj := fl.client.Bucket(fl.source.Bucket).Object(fPath)
 	_, err := obj.Attrs(ctx)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 
 	// open a reader for the object in the bucket
 	rc, err := obj.NewReader(ctx)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
 	rcReadAt := &GCPStorageReadAtAdaptor{rc}
 	defer func() {
 		if err := rcReadAt.Reader.Close(); err != nil {
-			fmt.Printf("LocalCSVFileClient:ReadData - error closing cloud file reader - file %s, err %v\n", fPath, err)
+			fmt.Printf("CloudCSVFileClient:ReadData - error closing cloud file reader - file %s, err %v\n", fPath, err)
 		}
 	}()
 
-	b := make([]byte, limit)
-
-	n, err := rcReadAt.ReadAt(b, offset)
+	data := make([]byte, limit)
+	n, err := rcReadAt.ReadAt(data, offset)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, false, err
 	}
-	return b, int64(n), nil
+
+	if offset < 1 {
+		// Create a buffer and CSV reader to read the headers
+		buffer := bytes.NewBuffer(data)
+		csvReader := csv.NewReader(buffer)
+		csvReader.Comma = '|'
+		csvReader.FieldsPerRecord = -1
+
+		// Read the headers from the CSV file
+		headers, err := csvReader.Read()
+		if err != nil {
+			return nil, 0, false, err
+		}
+		// set CSV file headers
+		fl.headers = headers
+	}
+
+	var nextOffset int64
+	i := bytes.LastIndex(data, []byte{'\n'})
+	if i > 0 && n == int(limit) {
+		nextOffset = int64(i) + 1
+	} else {
+		nextOffset = int64(n)
+	}
+
+	return data[:nextOffset], nextOffset, n < int(limit), nil
 }
 
 func (fl *CloudCSVFileClient) Close() error {

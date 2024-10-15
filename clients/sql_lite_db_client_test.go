@@ -3,6 +3,7 @@ package clients_test
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"testing"
 
 	bo "github.com/hankgalt/batch-orchestra"
@@ -11,8 +12,10 @@ import (
 )
 
 func TestSQLLiteDBClient(t *testing.T) {
+	l := getTestLogger()
 	dbFile := "data/__deleteme.db"
-	dbClient, err := clients.NewSQLLiteDBClient(dbFile)
+	tableName := "agent"
+	dbClient, err := clients.NewSQLLiteDBClient(dbFile, tableName)
 	require.NoError(t, err)
 
 	defer func() {
@@ -53,11 +56,7 @@ func TestSQLLiteDBClient(t *testing.T) {
 	}
 
 	batchSize := int64(2)
-	tableName := "agent"
-	reqFile := bo.FileSource{
-		FileName: tableName,
-	}
-	data, n, err := dbClient.ReadData(ctx, reqFile, int64(0), batchSize)
+	data, n, last, err := dbClient.ReadData(ctx, int64(0), batchSize)
 	require.NoError(t, err)
 	require.Equal(t, int64(2), n)
 
@@ -65,19 +64,43 @@ func TestSQLLiteDBClient(t *testing.T) {
 	require.Equal(t, true, ok)
 	require.Equal(t, int64(len(recs)), n)
 
-	recStream, errStream, err := dbClient.HandleData(ctx, reqFile, int64(0), data)
+	recStream, errStream, err := dbClient.HandleData(ctx, int64(0), data)
 	require.NoError(t, err)
 
-	processDBRecordStream(t, ctx, recStream, errStream)
+	recordCount, errorCount := processDBRecordStream(t, ctx, recStream, errStream)
+
+	offset := n
+	i := 1
+	for !last {
+		data, n, last, err = dbClient.ReadData(ctx, offset, batchSize)
+		require.NoError(t, err)
+
+		recs, ok := data.([]clients.Agent)
+		require.Equal(t, true, ok)
+		require.Equal(t, int64(len(recs)), n)
+
+		recStream, errStream, err := dbClient.HandleData(ctx, offset, data)
+		require.NoError(t, err)
+
+		recCount, errCount := processDBRecordStream(t, ctx, recStream, errStream)
+
+		recordCount += recCount
+		errorCount += errCount
+
+		offset += n
+
+		i++
+	}
+
+	l.Debug("TestLocalCSVFileClient", slog.Int("i", i), slog.Int("recordCount", recordCount), slog.Int("errorCount", errorCount))
+
+	require.Equal(t, recordCount, 5)
+	require.Equal(t, i, 3)
 }
 
-func processDBRecordStream(t *testing.T, ctx context.Context, recStream <-chan bo.Result, errStream <-chan error) {
+func processDBRecordStream(t *testing.T, ctx context.Context, recStream <-chan bo.Result, errStream <-chan error) (int, int) {
 	recCnt := 0
 	errCnt := 0
-
-	defer func() {
-		require.Equal(t, recCnt, 2)
-	}()
 
 	for {
 		select {
@@ -91,7 +114,7 @@ func processDBRecordStream(t *testing.T, ctx context.Context, recStream <-chan b
 				fmt.Printf("record# %d, record: %v\n", recCnt, val)
 			} else {
 				fmt.Println("record stream closed")
-				return
+				return recCnt, errCnt
 			}
 		case err, ok := <-errStream:
 			if ok {
@@ -99,11 +122,11 @@ func processDBRecordStream(t *testing.T, ctx context.Context, recStream <-chan b
 				fmt.Printf("error processing record: %v\n", err)
 			} else {
 				fmt.Println("error stream closed")
-				return
+				return recCnt, errCnt
 			}
 		case <-ctx.Done():
 			fmt.Println("timeout")
-			return
+			return recCnt, errCnt
 		}
 	}
 }

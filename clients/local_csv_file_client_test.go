@@ -1,9 +1,9 @@
 package clients_test
 
 import (
-	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"testing"
@@ -33,51 +33,70 @@ func getTestConfig() testConfig {
 }
 
 func TestLocalCSVFileClient(t *testing.T) {
+	l := getTestLogger()
 	fileName := "Agents-sm.csv"
 	filePath := "scheduler"
-	batchSize := int64(600)
+	batchSize := int64(400)
 
 	testCfg := getTestConfig()
 	localFilePath := filepath.Join(testCfg.dir, filePath)
 
-	reqFile := bo.FileSource{
-		FileName: fileName,
-		FilePath: localFilePath,
-	}
+	fileClient, err := clients.NewLocalCSVFileClient(fileName, localFilePath)
+	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	fileClient := &clients.LocalCSVFileClient{}
-
-	data, n, err := fileClient.ReadData(ctx, reqFile, int64(0), batchSize)
+	data, n, last, err := fileClient.ReadData(ctx, int64(0), batchSize)
 	require.NoError(t, err)
 
 	buf, ok := data.([]byte)
 	require.Equal(t, true, ok)
 
-	require.Equal(t, len(buf), int(batchSize))
-	require.Equal(t, n, batchSize)
+	l.Debug("TestLocalCSVFileClient", slog.Int64("n", n), slog.Int("len", len(buf)), slog.Any("last", last))
 
-	var nextOffset int64
-	i := 0
-	if data != nil {
-		i = bytes.LastIndex(data.([]byte), []byte{'\n'})
-	}
-	if i > 0 && n == batchSize {
-		nextOffset = int64(i) + 1
-	} else {
-		nextOffset = int64(n)
-	}
-	require.Equal(t, true, int64(nextOffset) < batchSize)
+	require.Equal(t, len(buf), int(n))
+	require.Equal(t, true, n < batchSize)
 
-	recStream, errStream, err := fileClient.HandleData(ctx, reqFile, int64(0), data)
+	recStream, errStream, err := fileClient.HandleData(ctx, int64(0), data)
 	require.NoError(t, err)
 
-	processCSVStream(t, ctx, recStream, errStream)
+	recordCount, errorCount := processCSVStream(t, ctx, recStream, errStream)
+
+	offset := n
+	i := 1
+	for !last {
+		// for !last {
+		data, n, last, err = fileClient.ReadData(ctx, offset, batchSize)
+		require.NoError(t, err)
+
+		buf, ok = data.([]byte)
+		require.Equal(t, true, ok)
+		l.Debug("TestLocalCSVFileClient", slog.Int64("n", n), slog.Int("len", len(buf)), slog.Any("last", last))
+
+		require.Equal(t, len(buf), int(n))
+		require.Equal(t, true, n < batchSize)
+
+		recStream, errStream, err := fileClient.HandleData(ctx, int64(0), data)
+		require.NoError(t, err)
+
+		recCount, errCount := processCSVStream(t, ctx, recStream, errStream)
+
+		recordCount += recCount
+		errorCount += errCount
+
+		offset += n
+
+		i++
+	}
+
+	l.Debug("TestLocalCSVFileClient", slog.Int("i", i), slog.Int("recordCount", recordCount), slog.Int("errorCount", errorCount))
+
+	require.Equal(t, recordCount, 26)
+	require.Equal(t, i, 10)
 }
 
-func processCSVStream(t *testing.T, ctx context.Context, recStream <-chan bo.Result, errStream <-chan error) {
+func processCSVStream(t *testing.T, ctx context.Context, recStream <-chan bo.Result, errStream <-chan error) (int, int) {
 	// require.NoError(nil)
 	recCnt := 0
 	errCnt := 0
@@ -93,7 +112,7 @@ func processCSVStream(t *testing.T, ctx context.Context, recStream <-chan bo.Res
 				fmt.Printf("record# %d, size: %d, record: %v\n", recCnt, len(vals), vals)
 			} else {
 				fmt.Println("record stream closed")
-				return
+				return recCnt, errCnt
 			}
 		case err, ok := <-errStream:
 			if ok {
@@ -101,11 +120,11 @@ func processCSVStream(t *testing.T, ctx context.Context, recStream <-chan bo.Res
 				fmt.Printf("error processing record: %v\n", err)
 			} else {
 				fmt.Println("error stream closed")
-				return
+				return recCnt, errCnt
 			}
 		case <-ctx.Done():
 			fmt.Println("timeout")
-			return
+			return recCnt, errCnt
 		}
 	}
 }
@@ -126,4 +145,23 @@ func TestFilePath(t *testing.T) {
 	require.Equal(t, dir, "data")
 	ext = filepath.Ext(filePath)
 	require.Equal(t, ext, ".db")
+}
+
+func getTestLogger() *slog.Logger {
+	// create log level var
+	logLevel := &slog.LevelVar{}
+	// set log level
+	logLevel.Set(slog.LevelDebug)
+	// create log handler options
+	opts := &slog.HandlerOptions{
+		Level: logLevel,
+	}
+	// create log handler
+	handler := slog.NewJSONHandler(os.Stdout, opts)
+	// create logger
+	l := slog.New(handler)
+	// set default logger
+	slog.SetDefault(l)
+
+	return l
 }

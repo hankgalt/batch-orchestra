@@ -25,11 +25,17 @@ var (
 	ErrInvalidData     = errors.New(ERR_INVALID_DATA)
 )
 
+type FileSource struct {
+	FileName string
+	FilePath string
+	Bucket   string
+}
+
 type CSVFileDataHandler struct {
 	bo.ChunkHandler
 }
 
-func (fl *CSVFileDataHandler) HandleData(ctx context.Context, fileSrc bo.FileSource, start int64, data interface{}) (<-chan bo.Result, <-chan error, error) {
+func (fl *CSVFileDataHandler) HandleData(ctx context.Context, start int64, data interface{}) (<-chan bo.Result, <-chan error, error) {
 	chnk, ok := data.([]byte)
 	if !ok {
 		return nil, nil, ErrInvalidData
@@ -90,17 +96,33 @@ func (fl *CSVFileDataHandler) HandleData(ctx context.Context, fileSrc bo.FileSou
 }
 
 type LocalCSVFileClient struct {
+	source  *FileSource
+	headers []string
 	bo.ChunkReader
 	CSVFileDataHandler
 }
 
-func (fl *LocalCSVFileClient) ReadData(ctx context.Context, fileInfo bo.FileSource, offset, limit int64) (interface{}, int64, error) {
-	localFilePath := filepath.Join(fileInfo.FilePath, fileInfo.FileName)
+func NewLocalCSVFileClient(fileName, filePath string) (*LocalCSVFileClient, error) {
+	// Check if the file name is provided
+	if fileName == "" {
+		return nil, ErrMissingFileName
+	}
+
+	return &LocalCSVFileClient{
+		source: &FileSource{
+			FileName: fileName,
+			FilePath: filePath,
+		},
+	}, nil
+}
+
+func (fl *LocalCSVFileClient) ReadData(ctx context.Context, offset, limit int64) (interface{}, int64, bool, error) {
+	localFilePath := filepath.Join(fl.source.FilePath, fl.source.FileName)
 
 	// open file
 	file, err := os.Open(localFilePath)
 	if err != nil {
-		return nil, 0, ErrMissingFile
+		return nil, 0, false, ErrMissingFile
 	}
 	defer func() {
 		err := file.Close()
@@ -114,11 +136,35 @@ func (fl *LocalCSVFileClient) ReadData(ctx context.Context, fileInfo bo.FileSour
 	n, err := file.ReadAt(data, offset)
 	if err != nil {
 		if err == io.EOF {
-			return data, int64(n), nil
+			return data[:n], int64(n), true, nil
 		} else {
-			return nil, 0, err
+			return nil, 0, false, err
 		}
 	}
 
-	return data, int64(n), nil
+	if offset < 1 {
+		// Create a buffer and CSV reader to read the headers
+		buffer := bytes.NewBuffer(data)
+		csvReader := csv.NewReader(buffer)
+		csvReader.Comma = '|'
+		csvReader.FieldsPerRecord = -1
+
+		// Read the headers from the CSV file
+		headers, err := csvReader.Read()
+		if err != nil {
+			return nil, 0, false, err
+		}
+		// set CSV file headers
+		fl.headers = headers
+	}
+
+	var nextOffset int64
+	i := bytes.LastIndex(data, []byte{'\n'})
+	if i > 0 && n == int(limit) {
+		nextOffset = int64(i) + 1
+	} else {
+		nextOffset = int64(n)
+	}
+
+	return data[:nextOffset], nextOffset, n < int(limit), nil
 }

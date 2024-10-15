@@ -12,11 +12,16 @@ import (
 
 type SQLLiteDBClient struct {
 	*sqlx.DB
-	bo.ChunkReader
-	bo.ChunkHandler
+	source *FileSource
+	bo.BatchRequestProcessor
 }
 
-func NewSQLLiteDBClient(dbFile string) (*SQLLiteDBClient, error) {
+func NewSQLLiteDBClient(dbFile, tableName string) (*SQLLiteDBClient, error) {
+	// Check if the table name is provided
+	if tableName == "" {
+		return nil, ErrMissingFileName
+	}
+
 	db, err := sqlx.Connect("sqlite3", dbFile)
 	if err != nil {
 		return nil, err
@@ -24,23 +29,26 @@ func NewSQLLiteDBClient(dbFile string) (*SQLLiteDBClient, error) {
 
 	return &SQLLiteDBClient{
 		DB: db,
+		source: &FileSource{
+			FileName: tableName,
+		},
 	}, nil
 }
 
-func (db *SQLLiteDBClient) ReadData(ctx context.Context, fileSrc bo.FileSource, offset, limit int64) (interface{}, int64, error) {
-	if fileSrc.FileName == "agent" {
+func (db *SQLLiteDBClient) ReadData(ctx context.Context, offset, limit int64) (interface{}, int64, bool, error) {
+	if db.source.FileName == "agent" {
 		agents, err := db.FetchEntityAgentRecords(ctx, int(offset), int(limit))
 		if err != nil {
-			return nil, 0, err
+			return nil, 0, false, err
 		}
-		return agents, int64(len(agents)), nil
+		return agents, int64(len(agents)), int64(len(agents)) < limit, nil
 	}
 
-	return nil, 0, fmt.Errorf("%s table not found", fileSrc.FileName)
+	return nil, 0, false, fmt.Errorf("%s table not found", db.source.FileName)
 }
 
-func (db *SQLLiteDBClient) HandleData(ctx context.Context, fileSrc bo.FileSource, start int64, data interface{}) (<-chan bo.Result, <-chan error, error) {
-	if fileSrc.FileName == "agent" {
+func (db *SQLLiteDBClient) HandleData(ctx context.Context, start int64, data interface{}) (<-chan bo.Result, <-chan error, error) {
+	if db.source.FileName == "agent" {
 		recs, ok := data.([]Agent)
 		if !ok {
 			return nil, nil, ErrInvalidData
@@ -68,7 +76,7 @@ func (db *SQLLiteDBClient) HandleData(ctx context.Context, fileSrc bo.FileSource
 		return recStream, errStream, nil
 	}
 
-	return nil, nil, fmt.Errorf("%s table not found", fileSrc.FileName)
+	return nil, nil, fmt.Errorf("%s table not found", db.source.FileName)
 }
 
 func (db *SQLLiteDBClient) Close() error {
