@@ -14,11 +14,11 @@ type BatchRequestProcessor interface {
 }
 
 type ChunkReader interface {
-	ReadData(ctx context.Context, fileSrc FileSource, offset, limit int64) (interface{}, int64, error)
+	ReadData(ctx context.Context, offset, limit int64) (interface{}, int64, bool, error)
 }
 
 type ChunkHandler interface {
-	HandleData(ctx context.Context, fileSrc FileSource, start int64, data interface{}) (<-chan Result, <-chan error, error)
+	HandleData(ctx context.Context, start int64, data interface{}) (<-chan Result, <-chan error, error)
 }
 ```
 
@@ -26,21 +26,15 @@ See `/clients` for sample reader implementations for a sqllite db client & reade
 
 Batch request workflow, based on file source, assigns file type to the request state. `MaxBatches` & `BatchSize` influences the concurrent processing and volume of data being processed
 ```
-type FileSource struct {
-	FileName string
-	FilePath string
-	Bucket   string
-}
-
 type BatchRequest struct {
 	MaxBatches int
 	BatchSize  int32
-	Source     *FileSource
+	FileName   string
 	Batches    map[string]*Batch
 }
 ```
 
-![Process Flow](/process-flow.png)
+![Process Flow](/process-flow-1.png)
 ## Setup
 ### Local
 - `go 1.21.6`

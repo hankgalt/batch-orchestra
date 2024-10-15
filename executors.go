@@ -21,30 +21,6 @@ func DefaultActivityOptions() workflow.ActivityOptions {
 	}
 }
 
-func ExecuteGetCSVHeadersActivity(ctx workflow.Context, req *FileInfo, batchSize int64) (*FileInfo, error) {
-	// setup activity options
-	ao := DefaultActivityOptions()
-	ao.RetryPolicy = &temporal.RetryPolicy{
-		InitialInterval:    time.Second,
-		BackoffCoefficient: 2.0,
-		MaximumInterval:    time.Minute,
-		MaximumAttempts:    10,
-		NonRetryableErrorTypes: []string{
-			ERR_MISSING_FILE_NAME,
-			ERR_MISSING_CLOUD_BUCKET,
-			ERR_MISSING_READER_CLIENT,
-		},
-	}
-	ctx = workflow.WithActivityOptions(ctx, ao)
-
-	var resp FileInfo
-	err := workflow.ExecuteActivity(ctx, GetCSVHeadersActivity, req, batchSize).Get(ctx, &resp)
-	if err != nil {
-		return req, err
-	}
-	return &resp, nil
-}
-
 func ExecuteGetNextOffsetActivity(ctx workflow.Context, req *FileInfo, batchSize int64) (*FileInfo, error) {
 	// setup activity options
 	ao := DefaultActivityOptions()
@@ -56,7 +32,6 @@ func ExecuteGetNextOffsetActivity(ctx workflow.Context, req *FileInfo, batchSize
 		NonRetryableErrorTypes: []string{
 			ERR_MISSING_FILE_NAME,
 			ERR_MISSING_READER_CLIENT,
-			ERR_MISSING_CLOUD_BUCKET,
 			ERR_MISSING_START_OFFSET,
 		},
 	}
@@ -81,7 +56,6 @@ func AsyncExecuteProcessBatchActivity(ctx workflow.Context, req *Batch) workflow
 		NonRetryableErrorTypes: []string{
 			ERR_MISSING_FILE_NAME,
 			ERR_MISSING_READER_CLIENT,
-			ERR_MISSING_CLOUD_BUCKET,
 			ERR_MISSING_START_OFFSET,
 			ERR_MISSING_BATCH_START_END,
 		},
