@@ -54,9 +54,6 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_Local_File_ProcessBatchReque
 	s.env.RegisterWorkflow(bo.ProcessBatchRequestWorkflow)
 
 	// register activities
-	s.env.RegisterActivityWithOptions(bo.GetCSVHeadersActivity, activity.RegisterOptions{
-		Name: bo.GetCSVHeadersActivityName,
-	})
 	s.env.RegisterActivityWithOptions(bo.GetNextOffsetActivity, activity.RegisterOptions{
 		Name: bo.GetNextOffsetActivityName,
 	})
@@ -65,7 +62,11 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_Local_File_ProcessBatchReque
 	})
 
 	// create file client
-	fileClient := &clients.LocalCSVFileClient{}
+	testCfg := getTestConfig()
+	filePath := fmt.Sprintf("%s/%s", testCfg.dir, testCfg.filePath)
+
+	fileClient, err := clients.NewLocalCSVFileClient(LIVE_FILE_NAME_1, filePath)
+	s.NoError(err)
 
 	ctx := context.WithValue(context.Background(), bo.ReaderClientContextKey, fileClient)
 	s.env.SetWorkerOptions(worker.Options{
@@ -74,23 +75,16 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_Local_File_ProcessBatchReque
 
 	s.env.SetTestTimeout(24 * time.Hour)
 
-	testCfg := getTestConfig()
-
 	s.Run("valid local csv file request", func() {
 		start := time.Now()
 
-		filePath := fmt.Sprintf("%s/%s", testCfg.dir, testCfg.filePath)
 		req := &bo.BatchRequest{
-			MaxBatches: 3,
+			MaxBatches: 2,
 			BatchSize:  400,
-			Source: &bo.FileSource{
-				FileName: LIVE_FILE_NAME_1,
-				FilePath: filePath,
-			},
+			FileName:   LIVE_FILE_NAME_1,
 		}
 
 		expectedCall := []string{
-			bo.GetCSVHeadersActivityName,
 			bo.GetNextOffsetActivityName,
 			bo.ProcessBatchActivityName,
 		}
@@ -105,25 +99,17 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_Local_File_ProcessBatchReque
 			// var lastOffset int64
 			switch activityType {
 			case expectedCall[0]:
-				// get headers
-				var input bo.FileInfo
-				s.NoError(args.Get(&input))
-				s.Equal(req.Source.FileName, input.FileName)
-				s.Equal(req.Source.FilePath, input.FilePath)
-			case expectedCall[1]:
 				// next offset
 				var input bo.FileInfo
 				s.NoError(args.Get(&input))
-				s.Equal(req.Source.FileName, input.FileName)
-				s.Equal(req.Source.FilePath, input.FilePath)
-				l.Debug("Test_Local_File_ProcessBatchRequestWorkflow - next offset called", slog.Any("headers", input.Headers), slog.Any("start", input.Start), slog.Any("offsets", input.OffSets))
-			case expectedCall[2]:
+				s.Equal(req.FileName, input.FileName)
+				l.Debug("Test_Local_File_ProcessBatchRequestWorkflow - next offset called", slog.Any("start", input.Start), slog.Any("offsets", input.OffSets))
+			case expectedCall[1]:
 				// process batch
 				var input bo.Batch
 				s.NoError(args.Get(&input))
-				s.Equal(req.Source.FileName, input.FileInfo.FileName)
-				s.Equal(req.Source.FilePath, input.FilePath)
-				l.Debug("Test_Local_File_ProcessBatchRequestWorkflow - process batch called", slog.Any("headers", input.Headers), slog.Any("start", input.Start), slog.Any("offsets", input.OffSets))
+				s.Equal(req.FileName, input.FileInfo.FileName)
+				l.Debug("Test_Local_File_ProcessBatchRequestWorkflow - process batch called", slog.Any("start", input.Start), slog.Any("offsets", input.OffSets))
 			default:
 				panic("Test_Local_File_ProcessBatchRequestWorkflow - unexpected activity call")
 			}
@@ -162,8 +148,8 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_Local_File_ProcessBatchReque
 					slog.Any("offsets", fileInfo.OffSets),
 					slog.Any("batches", batches),
 					slog.Any("record-count", recordCount))
-				s.True(recordCount == 25, "record count should be 25")
-				s.True(len(batches) == 9, "batch count should be 9")
+				s.True(recordCount == 26, "record count should be 26")
+				s.True(len(batches) == 10, "batch count should be 10")
 			}
 		}()
 
@@ -183,9 +169,6 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_Cloud_File_ProcessBatchReque
 	s.env.RegisterWorkflow(bo.ProcessBatchRequestWorkflow)
 
 	// register activities
-	s.env.RegisterActivityWithOptions(bo.GetCSVHeadersActivity, activity.RegisterOptions{
-		Name: bo.GetCSVHeadersActivityName,
-	})
 	s.env.RegisterActivityWithOptions(bo.GetNextOffsetActivity, activity.RegisterOptions{
 		Name: bo.GetNextOffsetActivityName,
 	})
@@ -198,6 +181,9 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_Cloud_File_ProcessBatchReque
 	// create file client
 	cscCfg := clients.CloudStorageClientConfig{
 		CredsPath: testCfg.credsPath,
+		FileName:  LIVE_FILE_NAME_1,
+		FilePath:  testCfg.filePath,
+		Bucket:    testCfg.bucket,
 	}
 	fileClient, err := clients.NewCloudCSVFileClient(cscCfg)
 	s.NoError(err)
@@ -219,15 +205,10 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_Cloud_File_ProcessBatchReque
 		req := &bo.BatchRequest{
 			MaxBatches: 2,
 			BatchSize:  400,
-			Source: &bo.FileSource{
-				FileName: LIVE_FILE_NAME_1,
-				FilePath: testCfg.filePath,
-				Bucket:   testCfg.bucket,
-			},
+			FileName:   LIVE_FILE_NAME_1,
 		}
 
 		expectedCall := []string{
-			bo.GetCSVHeadersActivityName,
 			bo.GetNextOffsetActivityName,
 			bo.ProcessBatchActivityName,
 		}
@@ -242,20 +223,15 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_Cloud_File_ProcessBatchReque
 			// var lastOffset int64
 			switch activityType {
 			case expectedCall[0]:
-				// get headers
-				var input bo.FileInfo
-				s.NoError(args.Get(&input))
-				s.Equal(req.Source.FileName, input.FileName)
-			case expectedCall[1]:
 				// next offset
 				var input bo.FileInfo
 				s.NoError(args.Get(&input))
-				s.Equal(req.Source.FileName, input.FileName)
-			case expectedCall[2]:
+				s.Equal(req.FileName, input.FileName)
+			case expectedCall[1]:
 				// process batch
 				var input bo.Batch
 				s.NoError(args.Get(&input))
-				s.Equal(req.Source.FileName, input.FileInfo.FileName)
+				s.Equal(req.FileName, input.FileInfo.FileName)
 				// s.Equal(input.End, lastOffset)
 			default:
 				panic("Test_Cloud_File_ProcessBatchRequestWorkflow - unexpected activity call")
@@ -295,8 +271,8 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_Cloud_File_ProcessBatchReque
 					slog.Any("offsets", fileInfo.OffSets),
 					slog.Any("batches", batches),
 					slog.Any("record-count", recordCount))
-				s.True(recordCount == 25, "record count should be 25")
-				s.True(len(batches) == 9, "batch count should be 9")
+				s.True(recordCount == 26, "record count should be 26")
+				s.True(len(batches) == 10, "batch count should be 10")
 			}
 		}()
 
@@ -344,9 +320,7 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_DB_File_ProcessBatchRequestW
 		req := &bo.BatchRequest{
 			MaxBatches: 2,
 			BatchSize:  2,
-			Source: &bo.FileSource{
-				FileName: TABLE_NAME_1,
-			},
+			FileName:   TABLE_NAME_1,
 		}
 
 		expectedCall := []string{
@@ -367,12 +341,12 @@ func (s *ProcessBatchRequestWorkflowTestSuite) Test_DB_File_ProcessBatchRequestW
 				// next offset
 				var input bo.FileInfo
 				s.NoError(args.Get(&input))
-				s.Equal(req.Source.FileName, input.FileName)
+				s.Equal(req.FileName, input.FileName)
 			case expectedCall[1]:
 				// process batch
 				var input bo.Batch
 				s.NoError(args.Get(&input))
-				s.Equal(req.Source.FileName, input.FileInfo.FileName)
+				s.Equal(req.FileName, input.FileInfo.FileName)
 				// s.Equal(input.End, lastOffset)
 			default:
 				panic("Test_DB_File_ProcessBatchRequestWorkflow - unexpected activity call")

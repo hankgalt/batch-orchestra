@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"path/filepath"
 
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
@@ -27,9 +26,8 @@ func ProcessBatchRequestWorkflow(ctx workflow.Context, req *BatchRequest) (*Batc
 	l := workflow.GetLogger(ctx)
 	l.Debug(
 		"ProcessBatchRequestWorkflow - started",
-		slog.String("file-name", req.Source.FileName),
-		slog.String("file-path", req.Source.FilePath),
-		slog.String("bucket", req.Source.Bucket))
+		slog.String("file-name", req.FileName),
+	)
 
 	count := 0
 	configErr := false
@@ -77,18 +75,15 @@ func ProcessBatchRequestWorkflow(ctx workflow.Context, req *BatchRequest) (*Batc
 			"ProcessBatchRequestWorkflow - failed",
 			slog.String("err-msg", err.Error()),
 			slog.Int("tries", count),
-			slog.String("file", req.Source.FileName),
-			slog.String("file-path", req.Source.FilePath),
-			slog.String("bucket", req.Source.Bucket),
+			slog.String("file", req.FileName),
 		)
 		return resp, temporal.NewApplicationErrorWithCause(ERR_PROCESS_BATCH_WKFL, ERR_PROCESS_BATCH_WKFL, err)
 	}
 
 	l.Debug(
 		"ProcessBatchRequestWorkflow - completed",
-		slog.String("file", req.Source.FileName),
-		slog.String("file-path", req.Source.FilePath),
-		slog.String("bucket", req.Source.Bucket))
+		slog.String("file", req.FileName),
+	)
 	return resp, nil
 }
 
@@ -98,9 +93,7 @@ func processBatchRequest(ctx workflow.Context, req *BatchRequest) (*BatchRequest
 	l := workflow.GetLogger(ctx)
 	l.Debug(
 		"processBatchRequest - workflow execution started",
-		slog.String("file", req.Source.FileName),
-		slog.String("file-path", req.Source.FilePath),
-		slog.String("bucket", req.Source.Bucket),
+		slog.String("file", req.FileName),
 	)
 
 	// TODO handle workflow state query
@@ -113,36 +106,12 @@ func processBatchRequest(ctx workflow.Context, req *BatchRequest) (*BatchRequest
 		return req, ErrorInvalidBatchSize
 	}
 
-	fileType := CSV
-	if req.Source.FileName == "" {
-		return req, ErrorMissingFileName
-	} else {
-		if req.Source.Bucket == "" {
-			ext := filepath.Ext(req.Source.FileName)
-			if ext == "" {
-				fileType = DB_CURSOR
-			}
-		} else {
-			fileType = CLOUD_CSV
-		}
-	}
-
 	// setup file info
 	fileInfo := &FileInfo{
-		FileSource: *req.Source,
-		FileType:   fileType,
+		FileName: req.FileName,
 	}
 
 	// TODO update file info from state
-	// if len(req.Batches) > 0 {
-	// 	max := int64(0)
-	// 	for _, b := range req.Batches {
-	// 		if b.Start > max {
-	// 			max = b.Start
-	// 		}
-	// 	}
-	// 	fileInfo = req.Batches[fmt.Sprintf("%s-%d", req.Source.FileName, max)].FileInfo
-	// }
 
 	batchSize := int64(req.BatchSize)
 
@@ -151,47 +120,19 @@ func processBatchRequest(ctx workflow.Context, req *BatchRequest) (*BatchRequest
 		req.Batches = map[string]*Batch{}
 	}
 
-	var err error
-	if fileType == CSV || fileType == CLOUD_CSV {
-		// get csv header
-		l.Debug(
-			"processBatchRequest - building CSV headers",
-			slog.String("file", req.Source.FileName),
-			slog.String("file-path", req.Source.FilePath),
-			slog.Any("file-type", fileInfo.FileType),
-			slog.String("bucket", req.Source.Bucket),
-		)
-		fileInfo, err = ExecuteGetCSVHeadersActivity(ctx, fileInfo, batchSize)
-		if err != nil {
-			l.Error(
-				"processBatchRequest - error getting headers",
-				slog.Any("error", err),
-				slog.String("file", req.Source.FileName),
-			)
-			return req, err
-		}
-	}
-
-	l.Debug(
-		"processBatchRequest - built headers, fetching next offset",
-		slog.String("file", fileInfo.FileName),
-		slog.Any("headers", fileInfo.Headers),
-		slog.Any("start", fileInfo.Start),
-	)
-
 	// get next batch offset
-	fileInfo, err = ExecuteGetNextOffsetActivity(ctx, fileInfo, batchSize)
+	fileInfo, err := ExecuteGetNextOffsetActivity(ctx, fileInfo, batchSize)
 	if err != nil {
 		l.Error(
 			"processBatchRequest - error getting next offset",
 			slog.Any("error", err),
-			slog.String("file", req.Source.FileName),
+			slog.String("file", req.FileName),
 		)
 		return req, err
 	}
 	l.Debug(
 		"processBatchRequest - fetched next offset ",
-		slog.String("file", req.Source.FileName),
+		slog.String("file", req.FileName),
 		slog.Any("offsets", fileInfo.OffSets),
 	)
 
@@ -224,7 +165,7 @@ func processBatchRequest(ctx workflow.Context, req *BatchRequest) (*BatchRequest
 				l.Error(
 					"processBatchRequest - error getting next offset",
 					slog.Any("error", err),
-					slog.String("file", req.Source.FileName))
+					slog.String("file", req.FileName))
 
 				start, end := fileInfo.OffSets[len(fileInfo.OffSets)-1], batchSize
 				nextBatReq := &Batch{
@@ -239,7 +180,7 @@ func processBatchRequest(ctx workflow.Context, req *BatchRequest) (*BatchRequest
 			} else {
 				l.Debug(
 					"processBatchRequest - fetched next offset ",
-					slog.String("file", req.Source.FileName),
+					slog.String("file", req.FileName),
 					slog.Any("offsets", fileInfo.OffSets),
 				)
 

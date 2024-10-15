@@ -1,12 +1,9 @@
 package batch_orchestra
 
 import (
-	"bytes"
 	"context"
-	"encoding/csv"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 
 	"go.temporal.io/sdk/activity"
@@ -32,7 +29,6 @@ const (
 	ERR_HANDLING_FILE_DATA      = "error handling file data"
 
 	ERR_MISSING_READER_CLIENT = "error missing reader client"
-	ERR_MISSING_CLOUD_BUCKET  = "error missing cloud bucket"
 	ERR_UNKNOWN_FILE_TYPE     = "error unknown file type"
 )
 
@@ -41,10 +37,7 @@ var (
 	ErrMissingFileName      = errors.New(ERR_MISSING_FILE_NAME)
 	ErrMissingStartOffset   = errors.New(ERR_MISSING_START_OFFSET)
 	ErrMissingBatchStartEnd = errors.New(ERR_MISSING_BATCH_START_END)
-	ErrMissingCloudBucket   = errors.New(ERR_MISSING_CLOUD_BUCKET)
-	ErrUnknownFileType      = errors.New(ERR_UNKNOWN_FILE_TYPE)
-
-	ErrMissingReaderClient = errors.New(ERR_MISSING_READER_CLIENT)
+	ErrMissingReaderClient  = errors.New(ERR_MISSING_READER_CLIENT)
 )
 
 // Temporal application errors for workflow activities
@@ -52,70 +45,8 @@ var (
 	ErrorMissingFileName      = temporal.NewApplicationErrorWithCause(ERR_MISSING_FILE_NAME, ERR_MISSING_FILE_NAME, ErrMissingFileName)
 	ErrorMissingStartOffset   = temporal.NewApplicationErrorWithCause(ERR_MISSING_START_OFFSET, ERR_MISSING_START_OFFSET, ErrMissingStartOffset)
 	ErrorMissingBatchStartEnd = temporal.NewApplicationErrorWithCause(ERR_MISSING_BATCH_START_END, ERR_MISSING_BATCH_START_END, ErrMissingBatchStartEnd)
-
-	ErrorMissingReaderClient = temporal.NewApplicationErrorWithCause(ERR_MISSING_READER_CLIENT, ERR_MISSING_READER_CLIENT, ErrMissingReaderClient)
-	ErrorMissingCloudBucket  = temporal.NewApplicationErrorWithCause(ERR_MISSING_CLOUD_BUCKET, ERR_MISSING_CLOUD_BUCKET, ErrMissingCloudBucket)
-	ErrorUnknownFileType     = temporal.NewApplicationErrorWithCause(ERR_UNKNOWN_FILE_TYPE, ERR_UNKNOWN_FILE_TYPE, ErrUnknownFileType)
+	ErrorMissingReaderClient  = temporal.NewApplicationErrorWithCause(ERR_MISSING_READER_CLIENT, ERR_MISSING_READER_CLIENT, ErrMissingReaderClient)
 )
-
-// GetCSVHeadersActivity populates state with headers info for a CSV file
-// This activity reads the headers of a CSV file and updates the FileInfo struct with the header information.
-// It performs several checks to ensure the required information is present before proceeding.
-func GetCSVHeadersActivity(ctx context.Context, req *FileInfo, batchSize int64) (*FileInfo, error) {
-	l := activity.GetLogger(ctx)
-	l.Debug("GetCSVHeadersActivity - started", slog.Any("file-info", req), slog.Int64("batch-size", batchSize))
-
-	// check if file name is provided
-	if req.FileName == "" {
-		l.Error(ERR_MISSING_FILE_NAME)
-		return req, ErrorMissingFileName
-	}
-
-	// check if cloud bucket is provided for cloud files
-	if req.FileType == CLOUD_CSV && req.Bucket == "" {
-		l.Error(ERR_MISSING_CLOUD_BUCKET)
-		return req, ErrorMissingCloudBucket
-	}
-
-	// retrieve reader client from context
-	dataSrc := ctx.Value(ReaderClientContextKey).(BatchRequestProcessor)
-	if dataSrc == nil {
-		l.Error(ERR_MISSING_READER_CLIENT)
-		return req, ErrorMissingReaderClient
-	}
-
-	select {
-	case <-ctx.Done():
-		l.Error("GetCSVHeadersActivity - context cancelled or timed out", slog.Any("error", ctx.Err()))
-		return req, ctx.Err()
-	default:
-		// Read data from the source starting at offset 0
-		data, _, err := dataSrc.ReadData(ctx, req.FileSource, int64(0), batchSize)
-		if err != nil {
-			if err != io.EOF {
-				return req, temporal.NewApplicationErrorWithCause(ERR_READING_FILE, ERR_READING_FILE, err)
-			}
-		}
-
-		// Create a buffer and CSV reader to read the headers
-		// TODO handle type casting error
-		buffer := bytes.NewBuffer(data.([]byte))
-		csvReader := csv.NewReader(buffer)
-		csvReader.Comma = '|'
-		csvReader.FieldsPerRecord = -1
-
-		// Read the headers from the CSV file
-		headers, err := csvReader.Read()
-		if err != nil {
-			l.Error(ERR_READING_FILE, slog.Any("error", err), slog.String("file", req.FileName))
-			return req, temporal.NewApplicationErrorWithCause(ERR_READING_FILE, ERR_READING_FILE, err)
-		}
-		req.Start = csvReader.InputOffset()
-		req.Headers = headers
-
-		return req, nil
-	}
-}
 
 // GetNextOffsetActivity populates state with next offset for given data file.
 // This activity calculates the next offset for reading data from a file based on the current state and batch size.
@@ -124,7 +55,6 @@ func GetNextOffsetActivity(ctx context.Context, req *FileInfo, batchSize int64) 
 	l.Debug(
 		"GetNextOffsetActivity - started",
 		slog.String("file-name", req.FileName),
-		slog.Any("file-type", req.FileType),
 		slog.Any("offsets", req.OffSets),
 		slog.Any("start", req.Start),
 		slog.Any("end", req.End),
@@ -134,23 +64,6 @@ func GetNextOffsetActivity(ctx context.Context, req *FileInfo, batchSize int64) 
 	if req.FileName == "" {
 		l.Error(ERR_MISSING_FILE_NAME)
 		return req, ErrorMissingFileName
-	}
-
-	if (req.FileType == CSV || req.FileType == CLOUD_CSV) && req.Start == 0 {
-		l.Debug(
-			"GetNextOffsetActivity - start check",
-			slog.String("file-name", req.FileName),
-			slog.Any("file-type", req.FileType),
-			slog.Any("start", req.Start),
-		)
-		l.Error(ERR_MISSING_START_OFFSET)
-		return req, ErrorMissingStartOffset
-	}
-
-	// check for cloud bucket
-	if req.FileType == CLOUD_CSV && req.Bucket == "" {
-		l.Error(ERR_MISSING_CLOUD_BUCKET)
-		return req, ErrorMissingCloudBucket
 	}
 
 	// get reader client from context
@@ -171,7 +84,7 @@ func GetNextOffsetActivity(ctx context.Context, req *FileInfo, batchSize int64) 
 
 	// calculate starting offset
 	sOffset := req.OffSets[len(req.OffSets)-1]
-	l.Debug("GetNextOffsetActivity - reading next chunk", slog.String("file-name", req.FileName), slog.Any("file-type", req.FileType), slog.Int64("offset", sOffset), slog.Int64("buffer-size", bufferSize))
+	l.Debug("GetNextOffsetActivity - reading next chunk", slog.String("file-name", req.FileName), slog.Int64("offset", sOffset), slog.Int64("buffer-size", bufferSize))
 
 	select {
 	case <-ctx.Done():
@@ -179,27 +92,14 @@ func GetNextOffsetActivity(ctx context.Context, req *FileInfo, batchSize int64) 
 		return req, ctx.Err()
 	default:
 		// read data
-		buf, n, err := dataSrc.ReadData(ctx, req.FileSource, sOffset, bufferSize)
+		_, n, last, err := dataSrc.ReadData(ctx, sOffset, bufferSize)
 		if err != nil {
 			l.Error(ERR_READING_FILE, slog.Any("error", err), slog.String("file", req.FileName))
 			return req, temporal.NewApplicationErrorWithCause(ERR_READING_FILE, ERR_READING_FILE, err)
 		}
 
 		// calculate next offset
-		var nextOffset int64
-		if req.FileType == CSV || req.FileType == CLOUD_CSV {
-			// TODO handle type casting error
-			i := bytes.LastIndex(buf.([]byte), []byte{'\n'})
-			if i > 0 && n == batchSize {
-				nextOffset = sOffset + int64(i) + 1
-			} else {
-				nextOffset = sOffset + n
-			}
-		} else if req.FileType == DB_CURSOR {
-			nextOffset = sOffset + n
-		} else {
-			return req, ErrorUnknownFileType
-		}
+		nextOffset := sOffset + n
 
 		// update request offsets
 		req.OffSets = append(req.OffSets, nextOffset)
@@ -208,9 +108,9 @@ func GetNextOffsetActivity(ctx context.Context, req *FileInfo, batchSize int64) 
 		// req.datas[req.FileName] = buf // pointer or actual buffer?
 
 		// set end of file is last batch
-		l.Debug("GetNextOffsetActivity - done", slog.String("file-name", req.FileName), slog.Any("file-type", req.FileType), slog.Int64("next-offset", nextOffset))
-		if n < batchSize {
-			l.Debug("GetNextOffsetActivity - last offset", slog.String("file-name", req.FileName), slog.Any("file-type", req.FileType))
+		l.Debug("GetNextOffsetActivity - done", slog.String("file-name", req.FileName), slog.Int64("next-offset", nextOffset))
+		if last {
+			l.Debug("GetNextOffsetActivity - last offset", slog.String("file-name", req.FileName))
 			req.End = nextOffset
 		}
 
@@ -254,7 +154,7 @@ func ProcessBatchActivity(ctx context.Context, req *Batch) (*Batch, error) {
 	}
 
 	// Read data from the source based on the start and end offsets
-	buf, _, err := dataSrc.ReadData(ctx, req.FileSource, req.Start, req.End-req.Start)
+	buf, _, _, err := dataSrc.ReadData(ctx, req.Start, req.End-req.Start)
 	if err != nil {
 		req.Error = err
 		l.Error(ERR_READING_FILE, slog.Any("error", err), slog.String("file", req.FileName))
@@ -274,7 +174,7 @@ func ProcessBatchActivity(ctx context.Context, req *Batch) (*Batch, error) {
 	// }
 	// delete(req.datas, req.BatchID) // deferred? preserve for retries?
 
-	recStream, errStream, err := dataSrc.HandleData(ctx, req.FileSource, req.Start, buf)
+	recStream, errStream, err := dataSrc.HandleData(ctx, req.Start, buf)
 	if err != nil {
 		req.Error = err
 		l.Error(ERR_HANDLING_FILE_DATA, slog.Any("error", err), slog.String("file", req.FileName))
