@@ -1,0 +1,21 @@
+{
+    "go.lintTool": "golangci-lint",
+    "go.lintFlags": [
+        "--fast" 
+    ],
+    "[go]": {
+        "editor.formatOnSave": true,
+        "editor.defaultFormatter": "golang.go",
+        "editor.codeActionsOnSave": {
+        "source.organizeImports": "always",
+        "source.fixAll": "always"
+        }
+    },
+    "go.testEnvFile": "${workspaceFolder}/env/test.env",
+    "go.testTimeout": "360m",
+    "go.testFlags": [
+        "-v",
+        "-timeout",
+        "360m"
+    ],
+}

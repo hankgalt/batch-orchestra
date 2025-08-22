@@ -1,527 +1,707 @@
 package batch_orchestra_test
 
 import (
+	"container/list"
 	"context"
 	"fmt"
-	"log/slog"
 	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
-	bo "github.com/hankgalt/batch-orchestra"
-	"github.com/hankgalt/batch-orchestra/clients"
-	"github.com/stretchr/testify/suite"
+	"github.com/stretchr/testify/require"
 	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/worker"
+
+	"github.com/comfforts/logger"
+
+	bo "github.com/hankgalt/batch-orchestra"
+	"github.com/hankgalt/batch-orchestra/pkg/domain"
+	"github.com/hankgalt/batch-orchestra/pkg/sinks"
+	"github.com/hankgalt/batch-orchestra/pkg/sources"
+	"github.com/hankgalt/batch-orchestra/pkg/utils"
 )
 
-const (
-	TABLE_NAME_1     string = "agent"
-	LIVE_FILE_NAME_1 string = "Agents-sm.csv"
-)
-
-const (
-	ActivityAlias              string = "some-random-activity-alias"
-	DeleteFileActivityAlias    string = "delete-file-activity-alias"
-	GetNextOffsetActivityAlias string = "getNext-offset-activity-alias"
-	ProcessBatchActivityAlias  string = "process-batch-activity-alias"
-)
-
-type BatchActivitiesTestSuite struct {
-	suite.Suite
-	testsuite.WorkflowTestSuite
+type ETLRequest[T any] struct {
+	MaxBatches uint
+	BatchSize  uint
+	Done       bool
+	Offsets    []uint64
+	Batches    map[string]*domain.BatchProcess[T]
 }
 
-func TestCSVBatchActivitiesTestSuite(t *testing.T) {
-	suite.Run(t, new(BatchActivitiesTestSuite))
-}
-
-func (s *BatchActivitiesTestSuite) SetupTest() {
-	// get test logger
-	l := getTestLogger()
-
-	// set environment logger
-	s.SetLogger(l)
-}
-
-func (s *BatchActivitiesTestSuite) Test_LocalActivity() {
-	l := s.GetLogger()
-
-	localActivityFn := func(ctx context.Context, name string) (string, error) {
-		return "hello " + name, nil
-	}
-
-	env := s.NewTestActivityEnvironment()
-	result, err := env.ExecuteLocalActivity(localActivityFn, "local_activity")
-	s.NoError(err)
-	var laResult string
-	err = result.Get(&laResult)
-	s.NoError(err)
-	l.Debug("Test_LocalActivity - local activity result", slog.Any("result", laResult))
-	s.Equal("hello local_activity", laResult)
-}
-
-func (s *BatchActivitiesTestSuite) Test_ActivityRegistration() {
-	l := s.GetLogger()
-
-	activityFn := func(msg string) (string, error) {
-		return msg, nil
-	}
-
-	env := s.NewTestActivityEnvironment()
-	env.RegisterActivityWithOptions(activityFn, activity.RegisterOptions{Name: ActivityAlias})
-	input := "some random input"
-
-	encodedValue, err := env.ExecuteActivity(activityFn, input)
-	s.NoError(err)
-	output := ""
-	encodedValue.Get(&output)
-	s.Equal(input, output)
-
-	encodedValue, err = env.ExecuteActivity(ActivityAlias, input)
-	s.NoError(err)
-	output = ""
-	encodedValue.Get(&output)
-	l.Debug("Test_ActivityRegistration - output: ", slog.Any("result", output))
-	s.Equal(input, output)
-}
-
-func (s *BatchActivitiesTestSuite) Test_Local_File_GetNextOffsetActivity() {
-	l := s.GetLogger()
-
-	// get test environment
-	env := s.NewTestActivityEnvironment()
-
-	// register GetNextOffsetActivity
-	env.RegisterActivityWithOptions(bo.GetNextOffsetActivity, activity.RegisterOptions{Name: GetNextOffsetActivityAlias})
-
-	testCfg := getTestConfig()
-	filePath := fmt.Sprintf("%s/%s", testCfg.dir, testCfg.filePath)
-
-	// create file client
-	fileClient, err := clients.NewLocalCSVFileClient(LIVE_FILE_NAME_1, filePath)
-	s.NoError(err)
-
-	// set reader client in request context
-	ctx := context.WithValue(context.Background(), bo.ReaderClientContextKey, fileClient)
-	env.SetWorkerOptions(worker.Options{
-		BackgroundActivityContext: ctx,
-	})
-
-	batchSize := int64(400)
-
-	s.Run("valid file", func() {
-		req := &bo.FileInfo{
-			FileName: LIVE_FILE_NAME_1,
-		}
-		s.Equal(req.Start, int64(0))
-
-		// test get next offset
-		result, err := s.testGetNextOffsetActivity(env, req, batchSize)
-		s.NoError(err)
-
-		i := 1
-		for i <= 12 {
-			i++
-			// test get next offset
-			result, err = s.testGetNextOffsetActivity(env, result, batchSize)
-			s.NoError(err)
-			l.Debug("Test_Local_File_GetNextOffsetActivity - get next offset result", slog.Any("result", result), slog.Any("count", i))
-			if result.End > 0 {
-				break
-			}
-		}
-
-		s.Equal(i, 10)
-		s.Equal(i, len(result.OffSets)-1)
-		s.Equal(result.End, result.OffSets[len(result.OffSets)-1])
-	})
-}
-
-func (s *BatchActivitiesTestSuite) Test_Cloud_File_GetNextOffsetActivity() {
-	l := s.GetLogger()
-
-	// get test environment
-	env := s.NewTestActivityEnvironment()
-
-	// register GetNextOffsetActivity
-	env.RegisterActivityWithOptions(bo.GetNextOffsetActivity, activity.RegisterOptions{Name: GetNextOffsetActivityAlias})
-
-	testCfg := getTestConfig()
-	// create file client
-	cscCfg := clients.CloudStorageClientConfig{
-		CredsPath: testCfg.credsPath,
-		FileName:  LIVE_FILE_NAME_1,
-		FilePath:  testCfg.filePath,
-		Bucket:    testCfg.bucket,
-	}
-	fileClient, err := clients.NewCloudCSVFileClient(cscCfg)
-	s.NoError(err)
-	defer func() {
-		err := fileClient.Close()
-		s.NoError(err)
-	}()
-
-	// set reader client in request context
-	ctx := context.WithValue(context.Background(), bo.ReaderClientContextKey, fileClient)
-	env.SetWorkerOptions(worker.Options{
-		BackgroundActivityContext: ctx,
-	})
-
-	batchSize := int64(400)
-
-	s.Run("valid file", func() {
-		req := &bo.FileInfo{
-			FileName: LIVE_FILE_NAME_1,
-		}
-		s.Equal(req.Start, int64(0))
-
-		result, err := s.testGetNextOffsetActivity(env, req, batchSize)
-		s.NoError(err)
-
-		i := 1
-		for i <= 12 {
-			i++
-			// get next offset
-			result, err = s.testGetNextOffsetActivity(env, result, batchSize)
-			s.NoError(err)
-			l.Debug("Test_Cloud_File_GetNextOffsetActivity - get next offset result", slog.Any("result", result), slog.Any("count", i))
-			if result.End > 0 {
-				break
-			}
-		}
-
-		s.Equal(i, 10)
-		s.Equal(i, len(result.OffSets)-1)
-		s.Equal(result.End, result.OffSets[len(result.OffSets)-1])
-	})
-}
-
-func (s *BatchActivitiesTestSuite) Test_DB_File_GetNextOffsetActivity() {
-	l := s.GetLogger()
-
-	// get test environment
-	env := s.NewTestActivityEnvironment()
-
-	// register GetNextOffsetActivity
-	env.RegisterActivityWithOptions(bo.GetNextOffsetActivity, activity.RegisterOptions{Name: GetNextOffsetActivityAlias})
-
-	// setup db client
-	dbClient, err := getTestDBClient()
-	s.NoError(err)
-
-	// insert 5 dummy records into db
-	err = insertAgentRecords(dbClient)
-	s.NoError(err)
-
-	// set reader client in request context
-	ctx := context.WithValue(context.Background(), bo.ReaderClientContextKey, dbClient)
-	env.SetWorkerOptions(worker.Options{
-		BackgroundActivityContext: ctx,
-	})
-
-	batchSize := int64(2)
-
-	s.Run("valid file", func() {
-		req := &bo.FileInfo{
-			FileName: TABLE_NAME_1,
-		}
-		s.Equal(req.Start, int64(0))
-
-		i := 0
-		result, err := s.testGetNextOffsetActivity(env, req, batchSize)
-		s.NoError(err)
-		l.Debug("Test_DB_File_GetNextOffsetActivity - get next offset result", slog.Any("result", result))
-		i++
-		for i <= 5 {
-			i++
-			// test get next offset
-			result, err = s.testGetNextOffsetActivity(env, result, batchSize)
-			s.NoError(err)
-			l.Debug("Test_DB_File_GetNextOffsetActivity - get next offset result", slog.Any("result", result))
-			if result.End > 0 {
-				break
-			}
-		}
-
-		s.Equal(i, 3)
-		s.Equal(i, len(result.OffSets)-1)
-		s.Equal(result.End, result.OffSets[len(result.OffSets)-1])
-	})
-}
-
-func (s *BatchActivitiesTestSuite) testGetNextOffsetActivity(env *testsuite.TestActivityEnvironment, req *bo.FileInfo, batchSize int64) (*bo.FileInfo, error) {
-	resp, err := env.ExecuteActivity(bo.GetNextOffsetActivity, req, batchSize)
-	if err != nil {
-		return nil, err
-	}
-
-	var result bo.FileInfo
-	err = resp.Get(&result)
-	if err != nil {
-		return nil, err
-	}
-	return &result, nil
-}
-
-func (s *BatchActivitiesTestSuite) Test_Local_File_ProcessBatchActivity() {
-	l := s.GetLogger()
-
-	// get test environment
-	env := s.NewTestActivityEnvironment()
-
-	// register GetNextOffsetActivity & ProcessBatchActivity
-	env.RegisterActivityWithOptions(bo.GetNextOffsetActivity, activity.RegisterOptions{Name: GetNextOffsetActivityAlias})
-	env.RegisterActivityWithOptions(bo.ProcessBatchActivity, activity.RegisterOptions{Name: ProcessBatchActivityAlias})
-
-	testCfg := getTestConfig()
-	filePath := fmt.Sprintf("%s/%s", testCfg.dir, testCfg.filePath)
-
-	// create file client
-	fileClient, err := clients.NewLocalCSVFileClient(LIVE_FILE_NAME_1, filePath)
-	s.NoError(err)
-
-	// set reader client in request context
-	ctx := context.WithValue(context.Background(), bo.ReaderClientContextKey, fileClient)
-	env.SetWorkerOptions(worker.Options{
-		BackgroundActivityContext: ctx,
-	})
-
-	batchSize := int64(400)
-
-	s.Run("valid file", func() {
-		req := &bo.FileInfo{
-			FileName: LIVE_FILE_NAME_1,
-		}
-		s.Equal(req.Start, int64(0))
-
-		// get next offset
-		result, err := s.testGetNextOffsetActivity(env, req, batchSize)
-		s.NoError(err)
-		l.Debug("Test_Local_File_ProcessBatchActivity - get next offset result", slog.Any("result", result))
-
-		// process batch
-		batchReq := &bo.Batch{
-			FileInfo: result,
-			Start:    result.OffSets[len(result.OffSets)-2],
-			End:      result.OffSets[len(result.OffSets)-1],
-		}
-
-		batchRes, err := s.testProcessBatchActivity(env, batchReq)
-		s.NoError(err)
-		l.Debug("Test_Local_File_ProcessBatchActivity - process batch result", slog.Any("result", batchRes))
-		s.Equal(3, len(batchRes.Records))
-	})
-}
-
-func (s *BatchActivitiesTestSuite) Test_Cloud_File_ProcessBatchActivity() {
-	l := s.GetLogger()
-
-	// get test environment
-	env := s.NewTestActivityEnvironment()
-
-	// register GetNextOffsetActivity & ProcessBatchActivity
-	env.RegisterActivityWithOptions(bo.GetNextOffsetActivity, activity.RegisterOptions{Name: GetNextOffsetActivityAlias})
-	env.RegisterActivityWithOptions(bo.ProcessBatchActivity, activity.RegisterOptions{Name: ProcessBatchActivityAlias})
-
-	testCfg := getTestConfig()
-	// create file client
-	cscCfg := clients.CloudStorageClientConfig{
-		CredsPath: testCfg.credsPath,
-		FileName:  LIVE_FILE_NAME_1,
-		FilePath:  testCfg.filePath,
-		Bucket:    testCfg.bucket,
-	}
-	fileClient, err := clients.NewCloudCSVFileClient(cscCfg)
-	s.NoError(err)
-	defer func() {
-		err := fileClient.Close()
-		s.NoError(err)
-	}()
-
-	// set reader client in request context
-	ctx := context.WithValue(context.Background(), bo.ReaderClientContextKey, fileClient)
-	env.SetWorkerOptions(worker.Options{
-		BackgroundActivityContext: ctx,
-	})
-
-	batchSize := int64(400)
-
-	s.Run("valid file", func() {
-		req := &bo.FileInfo{
-			FileName: LIVE_FILE_NAME_1,
-		}
-		s.Equal(req.Start, int64(0))
-
-		// get next offset
-		result, err := s.testGetNextOffsetActivity(env, req, batchSize)
-		s.NoError(err)
-		l.Debug("Test_Cloud_File_ProcessBatchActivity - get next offset result", slog.Any("result", result))
-
-		// process batch
-		batchReq := &bo.Batch{
-			FileInfo: result,
-			Start:    result.OffSets[len(result.OffSets)-2],
-			End:      result.OffSets[len(result.OffSets)-1],
-		}
-
-		batchRes, err := s.testProcessBatchActivity(env, batchReq)
-		s.NoError(err)
-		l.Debug("Test_Cloud_File_ProcessBatchActivity - process batch result", slog.Any("result", batchRes))
-		s.Equal(3, len(batchRes.Records))
-	})
-}
-
-func (s *BatchActivitiesTestSuite) Test_DB_File_ProcessBatchActivity() {
-	l := s.GetLogger()
-
-	// get test environment
-	env := s.NewTestActivityEnvironment()
-
-	// register GetNextOffsetActivity & ProcessBatchActivity
-	env.RegisterActivityWithOptions(bo.GetNextOffsetActivity, activity.RegisterOptions{Name: GetNextOffsetActivityAlias})
-	env.RegisterActivityWithOptions(bo.ProcessBatchActivity, activity.RegisterOptions{Name: ProcessBatchActivityAlias})
-
-	// setup db client
-	dbClient, err := getTestDBClient()
-	s.NoError(err)
-
-	// insert 5 dummy records into db
-	err = insertAgentRecords(dbClient)
-	s.NoError(err)
-
-	// set reader client in request context
-	ctx := context.WithValue(context.Background(), bo.ReaderClientContextKey, dbClient)
-	env.SetWorkerOptions(worker.Options{
-		BackgroundActivityContext: ctx,
-	})
-
-	batchSize := int64(2)
-
-	s.Run("valid file", func() {
-		req := &bo.FileInfo{
-			FileName: TABLE_NAME_1,
-		}
-		s.Equal(req.Start, int64(0))
-
-		// get next offset
-		result, err := s.testGetNextOffsetActivity(env, req, batchSize)
-		s.NoError(err)
-		l.Debug("Test_DB_File_ProcessBatchActivity - get next offset result", slog.Any("result", result))
-
-		// process batch
-		batchReq := &bo.Batch{
-			FileInfo: result,
-			Start:    result.OffSets[len(result.OffSets)-2],
-			End:      result.OffSets[len(result.OffSets)-1],
-		}
-
-		batchRes, err := s.testProcessBatchActivity(env, batchReq)
-		s.NoError(err)
-		l.Debug("Test_DB_File_ProcessBatchActivity - process batch result", slog.Any("result", batchRes))
-		s.Equal(2, len(batchRes.Records))
-	})
-}
-
-func (s *BatchActivitiesTestSuite) testProcessBatchActivity(env *testsuite.TestActivityEnvironment, req *bo.Batch) (*bo.Batch, error) {
-	resp, err := env.ExecuteActivity(bo.ProcessBatchActivity, req)
-	if err != nil {
-		return nil, err
-	}
-
-	var result bo.Batch
-	err = resp.Get(&result)
-	if err != nil {
-		return nil, err
-	}
-	return &result, nil
-}
-
-func getTestLogger() *slog.Logger {
-	// create log level var
-	logLevel := &slog.LevelVar{}
-	// set log level
-	logLevel.Set(slog.LevelInfo)
-	// create log handler options
-	opts := &slog.HandlerOptions{
-		Level: logLevel,
-	}
-	// create log handler
-	handler := slog.NewJSONHandler(os.Stdout, opts)
-	// create logger
-	l := slog.New(handler)
-	// set default logger
-	slog.SetDefault(l)
-
-	return l
-}
-
-type testConfig struct {
-	dir       string
-	bucket    string
-	credsPath string
-	filePath  string
-}
-
-func getTestConfig() testConfig {
-	dataDir := os.Getenv("DATA_DIR")
-	credsPath := os.Getenv("CREDS_PATH")
-	bktName := os.Getenv("BUCKET_NAME")
-	filePath := os.Getenv("FILE_PATH")
-
-	return testConfig{
-		dir:       dataDir,
-		bucket:    bktName,
-		credsPath: credsPath,
-		filePath:  filePath,
-	}
-}
-
-func getTestDBClient() (*clients.SQLLiteDBClient, error) {
-	dbFile := "data/__deleteme.db"
-	dbClient, err := clients.NewSQLLiteDBClient(dbFile, TABLE_NAME_1)
-	if err != nil {
-		return nil, err
-	}
-
-	dbClient.ExecuteSchema(clients.AgentSchema)
-
-	return dbClient, nil
-}
-
-func insertAgentRecords(dbClient *clients.SQLLiteDBClient) error {
-	records := []map[string]interface{}{}
-	for i := 1; i <= 5; i++ {
-		records = append(records, map[string]interface{}{
-			"entity_id":   i,
-			"entity_name": fmt.Sprintf("entity_%d", i),
-			"first_name":  fmt.Sprintf("first_%d", i),
-			"last_name":   fmt.Sprintf("last_%d", i),
-			"agent_type":  "individual agent",
-		})
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
+func Test_FetchNext_LocalTempCSV(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestActivityEnvironment()
+
+	l := logger.GetSlogLogger()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+	ctx = logger.WithLogger(ctx, l)
 
-	for _, rec := range records {
-		res, err := dbClient.InsertAgentRecord(ctx, rec)
-		if err != nil {
-			fmt.Printf("error inserting record: %v, error: %v\n", rec, err)
-			return err
-		}
+	env.SetWorkerOptions(worker.Options{
+		BackgroundActivityContext: ctx,
+	})
 
-		_, err = res.LastInsertId()
-		if err != nil {
-			fmt.Printf("error record insert ID: %v, error: %v\n", rec, err)
-			return err
+	// Register the generic activity instantiation to call.
+	env.RegisterActivityWithOptions(
+		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
+		activity.RegisterOptions{
+			Name: bo.FetchNextLocalCSVSourceBatchAlias,
+		},
+	)
+
+	// Build a small CSV
+	path := writeTempCSV(t,
+		[]string{"id", "name"},
+		[][]string{
+			{"1", "alpha"},
+			{"2", "beta"},
+			{"3", "gamma"},
+			{"4", "delta"},
+			{"5", "epsilon"},
+		},
+	)
+	defer func() {
+		require.NoError(t, os.Remove(path), "cleanup temp CSV file")
+	}()
+
+	// Create a local CSV config
+	cfg := sources.LocalCSVConfig{
+		Path:      path,
+		HasHeader: true,
+	}
+
+	// initialize batch size & next offset
+	// Use a batch size larger than the largest row size in bytes to ensure more than one row is fetched.
+	batchSize := uint(30)
+	nextOffset := uint64(0)
+
+	fIn := &domain.FetchInput[domain.CSVRow, sources.LocalCSVConfig]{
+		Source:    cfg,
+		Offset:    nextOffset,
+		BatchSize: batchSize,
+	}
+	val, err := env.ExecuteActivity(bo.FetchNextLocalCSVSourceBatchAlias, fIn)
+	require.NoError(t, err)
+
+	var out domain.FetchOutput[domain.CSVRow]
+	require.NoError(t, val.Get(&out))
+	require.False(t, out.Batch.Done)
+	require.Len(t, out.Batch.Records, 2)
+	require.EqualValues(t, 23, out.Batch.NextOffset)
+	require.Equal(t, domain.CSVRow{"id": "1", "name": "alpha"}, out.Batch.Records[0].Data)
+	require.Equal(t, domain.CSVRow{"id": "2", "name": "beta"}, out.Batch.Records[1].Data)
+
+	// Fetch the next batch of records till done
+	for out.Batch.Done == false {
+		fIn = &domain.FetchInput[domain.CSVRow, sources.LocalCSVConfig]{
+			Source:    cfg,
+			Offset:    out.Batch.NextOffset,
+			BatchSize: batchSize,
 		}
-		_, err = res.RowsAffected()
-		if err != nil {
-			fmt.Printf("error record rows affected: %v, error: %v\n", rec, err)
-			return err
+		val, err := env.ExecuteActivity(bo.FetchNextLocalCSVSourceBatchAlias, fIn)
+		require.NoError(t, err)
+		require.NoError(t, val.Get(&out))
+		require.Equal(t, true, out.Batch.NextOffset > 0, "next offset should be greater than 0")
+	}
+
+	require.True(t, out.Batch.Done)
+	require.EqualValues(t, 49, out.Batch.NextOffset)
+}
+
+func Test_FetchNext_LocalCSV(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestActivityEnvironment()
+
+	l := logger.GetSlogLogger()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	ctx = logger.WithLogger(ctx, l)
+
+	env.SetWorkerOptions(worker.Options{
+		BackgroundActivityContext: ctx,
+	})
+
+	// Register the generic activity instantiation we will call.
+	// In test env, this is optional for function activities, but explicit is fine.
+	env.RegisterActivityWithOptions(
+		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
+		activity.RegisterOptions{
+			Name: bo.FetchNextLocalCSVSourceBatchAlias,
+		},
+	)
+
+	fileName := utils.BuildFileName()
+	filePath, err := utils.BuildFilePath()
+	require.NoError(t, err, "error building file path for test CSV")
+
+	path := filepath.Join(filePath, fileName)
+
+	cfg := sources.LocalCSVConfig{
+		Path:         path,
+		Delimiter:    '|',
+		HasHeader:    true,
+		MappingRules: domain.BuildBusinessModelTransformRules(),
+	}
+
+	batchSize := uint(400) // larger than the largest row size in bytes
+	nextOffset := uint64(0)
+
+	fIn := &domain.FetchInput[domain.CSVRow, sources.LocalCSVConfig]{
+		Source:    cfg,
+		Offset:    nextOffset,
+		BatchSize: batchSize,
+	}
+	val, err := env.ExecuteActivity(bo.FetchNextLocalCSVSourceBatchAlias, fIn)
+	require.NoError(t, err)
+
+	var out domain.FetchOutput[domain.CSVRow]
+	require.NoError(t, val.Get(&out))
+	require.Equal(t, true, out.Batch.NextOffset > 0, "next offset should be greater than 0")
+
+	for out.Batch.Done == false {
+		fIn = &domain.FetchInput[domain.CSVRow, sources.LocalCSVConfig]{
+			Source:    cfg,
+			Offset:    out.Batch.NextOffset,
+			BatchSize: batchSize,
+		}
+		val, err = env.ExecuteActivity(bo.FetchNextLocalCSVSourceBatchAlias, fIn)
+		require.NoError(t, err)
+
+		require.NoError(t, val.Get(&out))
+		require.Equal(t, true, out.Batch.NextOffset > 0, "next offset should be greater than 0")
+	}
+}
+
+func Test_FetchNext_CloudCSV(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestActivityEnvironment()
+
+	l := logger.GetSlogLogger()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	ctx = logger.WithLogger(ctx, l)
+
+	env.SetWorkerOptions(worker.Options{
+		BackgroundActivityContext: ctx,
+	})
+
+	// Register activity
+	env.RegisterActivityWithOptions(
+		bo.FetchNextActivity[domain.CSVRow, sources.CloudCSVConfig],
+		activity.RegisterOptions{
+			Name: bo.FetchNextCloudCSVSourceBatchAlias,
+		},
+	)
+
+	envCfg, err := utils.BuildCloudFileConfig()
+	require.NoError(t, err, "error building cloud CSV config for test environment")
+
+	path := filepath.Join(envCfg.Path, envCfg.Name)
+
+	cfg := sources.CloudCSVConfig{
+		Path:         path,
+		Bucket:       envCfg.Bucket,
+		Provider:     string(sources.CloudSourceGCS),
+		Delimiter:    '|',
+		HasHeader:    true,
+		MappingRules: domain.BuildBusinessModelTransformRules(),
+	}
+
+	batchSize := uint(400) // larger than the largest row size in bytes
+	nextOffset := uint64(0)
+
+	fIn := &domain.FetchInput[domain.CSVRow, sources.CloudCSVConfig]{
+		Source:    cfg,
+		Offset:    nextOffset,
+		BatchSize: batchSize,
+	}
+	val, err := env.ExecuteActivity(bo.FetchNextCloudCSVSourceBatchAlias, fIn)
+	require.NoError(t, err)
+
+	var out domain.FetchOutput[domain.CSVRow]
+	require.NoError(t, val.Get(&out))
+	require.Equal(t, true, out.Batch.NextOffset > 0, "next offset should be greater than 0")
+
+	for out.Batch.Done == false {
+		fIn = &domain.FetchInput[domain.CSVRow, sources.CloudCSVConfig]{
+			Source:    cfg,
+			Offset:    out.Batch.NextOffset,
+			BatchSize: batchSize,
+		}
+		val, err := env.ExecuteActivity(bo.FetchNextCloudCSVSourceBatchAlias, fIn)
+		require.NoError(t, err)
+
+		require.NoError(t, val.Get(&out))
+		require.Equal(t, true, out.Batch.NextOffset > 0, "next offset should be greater than 0")
+	}
+}
+
+func Test_Write_NoopSink(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestActivityEnvironment()
+
+	l := logger.GetSlogLogger()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	ctx = logger.WithLogger(ctx, l)
+
+	env.SetWorkerOptions(worker.Options{
+		BackgroundActivityContext: ctx,
+	})
+
+	env.RegisterActivityWithOptions(
+		bo.WriteActivity[domain.CSVRow, sinks.NoopSinkConfig[domain.CSVRow]],
+		activity.RegisterOptions{
+			Name: bo.WriteNextNoopSinkBatchAlias,
+		},
+	)
+
+	recs := []*domain.BatchRecord[domain.CSVRow]{
+		{
+			Start: 0,
+			End:   10,
+			Data:  domain.CSVRow{"id": "1", "name": "alpha"},
+		},
+		{
+			Start: 10,
+			End:   20,
+			Data:  domain.CSVRow{"id": "2", "name": "beta"},
+		},
+	}
+	b := &domain.BatchProcess[domain.CSVRow]{
+		Records:    recs,
+		NextOffset: 30,
+		Done:       false,
+	}
+
+	in := &domain.WriteInput[domain.CSVRow, sinks.NoopSinkConfig[domain.CSVRow]]{
+		Sink:  sinks.NoopSinkConfig[domain.CSVRow]{},
+		Batch: b,
+	}
+
+	val, err := env.ExecuteActivity(bo.WriteNextNoopSinkBatchAlias, in)
+	require.NoError(t, err)
+
+	var out domain.WriteOutput[domain.CSVRow]
+	require.NoError(t, val.Get(&out))
+	require.Equal(t, 2, len(out.Batch.Records))
+}
+
+func Test_Write_MongoSink(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestActivityEnvironment()
+
+	l := logger.GetSlogLogger()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	ctx = logger.WithLogger(ctx, l)
+
+	env.SetWorkerOptions(worker.Options{
+		BackgroundActivityContext: ctx,
+		DeadlockDetectionTimeout:  24 * time.Hour, // set a long timeout to avoid deadlock detection during tests
+	})
+
+	env.SetTestTimeout(24 * time.Hour)
+
+	env.RegisterActivityWithOptions(
+		bo.WriteActivity[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]],
+		activity.RegisterOptions{
+			Name: bo.WriteNextMongoSinkBatchAlias,
+		},
+	)
+
+	recs := []*domain.BatchRecord[domain.CSVRow]{
+		{
+			Start: 0,
+			End:   10,
+			Data:  domain.CSVRow{"id": "1", "name": "alpha"},
+		},
+		{
+			Start: 10,
+			End:   20,
+			Data:  domain.CSVRow{"id": "2", "name": "beta"},
+		},
+	}
+
+	b := &domain.BatchProcess[domain.CSVRow]{
+		Records:    recs,
+		NextOffset: 30,
+		Done:       false,
+	}
+
+	nmCfg := utils.BuildMongoStoreConfig()
+	require.NotEmpty(t, nmCfg.DBName, "MongoDB name should not be empty")
+	require.NotEmpty(t, nmCfg.Host, "MongoDB host should not be empty")
+
+	cfg := sinks.MongoSinkConfig[domain.CSVRow]{
+		Protocol:   nmCfg.Protocol,
+		Host:       nmCfg.Host,
+		DBName:     nmCfg.DBName,
+		User:       nmCfg.User,
+		Pwd:        nmCfg.Pwd,
+		Params:     nmCfg.Params,
+		Collection: "test.people",
+	}
+
+	in := &domain.WriteInput[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]]{
+		Sink:  cfg,
+		Batch: b,
+	}
+
+	val, err := env.ExecuteActivity(bo.WriteNextMongoSinkBatchAlias, in)
+	require.NoError(t, err)
+
+	var out domain.WriteOutput[domain.CSVRow]
+	require.NoError(t, val.Get(&out))
+	require.Equal(t, 2, len(out.Batch.Records))
+}
+
+func Test_FetchAndWrite_LocalCSVSource_MongoSink_Queue(t *testing.T) {
+	// setup test environment
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestActivityEnvironment()
+
+	// setup logger & global activity execution context
+	l := logger.GetSlogLogger()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	ctx = logger.WithLogger(ctx, l)
+
+	env.SetWorkerOptions(worker.Options{
+		BackgroundActivityContext: ctx,
+		DeadlockDetectionTimeout:  24 * time.Hour, // set a long timeout to avoid deadlock detection during tests
+	})
+
+	env.SetTestTimeout(24 * time.Hour)
+
+	// Register activities.
+	env.RegisterActivityWithOptions(
+		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
+		activity.RegisterOptions{
+			Name: bo.FetchNextLocalCSVSourceBatchAlias,
+		},
+	)
+	env.RegisterActivityWithOptions(
+		bo.WriteActivity[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]],
+		activity.RegisterOptions{
+			Name: bo.WriteNextMongoSinkBatchAlias,
+		},
+	)
+
+	// Build source & sink configurations
+	// Source - local CSV
+	fileName := utils.BuildFileName()
+	filePath, err := utils.BuildFilePath()
+	require.NoError(t, err, "error building csv file path for test")
+	path := filepath.Join(filePath, fileName)
+	sourceCfg := sources.LocalCSVConfig{
+		Path:         path,
+		Delimiter:    '|',
+		HasHeader:    true,
+		MappingRules: domain.BuildBusinessModelTransformRules(),
+	}
+
+	// Sink - MongoDB
+	mCfg := utils.BuildMongoStoreConfig()
+	require.NotEmpty(t, mCfg.DBName, "MongoDB name should not be empty")
+	require.NotEmpty(t, mCfg.Host, "MongoDB host should not be empty")
+	sinkCfg := sinks.MongoSinkConfig[domain.CSVRow]{
+		Protocol:   mCfg.Protocol,
+		Host:       mCfg.Host,
+		DBName:     mCfg.DBName,
+		User:       mCfg.User,
+		Pwd:        mCfg.Pwd,
+		Params:     mCfg.Params,
+		Collection: "vypar.agents",
+	}
+
+	// Build ETL request
+	// batchSize should be larger than the largest row size in bytes
+	etlReq := &ETLRequest[domain.CSVRow]{
+		MaxBatches: 2,
+		BatchSize:  400,
+		Done:       false,
+		Offsets:    []uint64{},
+		Batches:    map[string]*domain.BatchProcess[domain.CSVRow]{},
+	}
+
+	etlReq.Offsets = append(etlReq.Offsets, uint64(0))
+
+	// initiate a new queue
+	q := list.New()
+
+	// setup first batch request
+	fIn := &domain.FetchInput[domain.CSVRow, sources.LocalCSVConfig]{
+		Source:    sourceCfg,
+		Offset:    etlReq.Offsets[len(etlReq.Offsets)-1],
+		BatchSize: etlReq.BatchSize,
+	}
+
+	// Execute the fetch activity for first batch
+	fVal, err := env.ExecuteActivity(bo.FetchNextLocalCSVSourceBatchAlias, fIn)
+	require.NoError(t, err)
+
+	var fOut domain.FetchOutput[domain.CSVRow]
+	require.NoError(t, fVal.Get(&fOut))
+	require.Equal(t, true, len(fOut.Batch.Records) > 0)
+
+	// Store the fetched batch in ETL request
+	etlReq.Offsets = append(etlReq.Offsets, fOut.Batch.NextOffset)
+	etlReq.Done = fOut.Batch.Done
+
+	// setup first write request
+	wIn := &domain.WriteInput[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]]{
+		Sink:  sinkCfg,
+		Batch: fOut.Batch,
+	}
+
+	// Execute async the write activity for first batch
+	wVal, err := env.ExecuteActivity(bo.WriteNextMongoSinkBatchAlias, wIn)
+	require.NoError(t, err)
+
+	// Push the write activity future to the queue
+	q.PushBack(wVal)
+
+	// while there are items in queue
+	count := 0
+	for q.Len() > 0 {
+		// if queue has less than max batches and batches are not done
+		if q.Len() < int(etlReq.MaxBatches) && !etlReq.Done {
+			fIn = &domain.FetchInput[domain.CSVRow, sources.LocalCSVConfig]{
+				Source:    sourceCfg,
+				Offset:    etlReq.Offsets[len(etlReq.Offsets)-1],
+				BatchSize: etlReq.BatchSize,
+			}
+
+			fVal, err := env.ExecuteActivity(bo.FetchNextLocalCSVSourceBatchAlias, fIn)
+			require.NoError(t, err)
+
+			var fOut domain.FetchOutput[domain.CSVRow]
+			require.NoError(t, fVal.Get(&fOut))
+			require.Equal(t, true, len(fOut.Batch.Records) > 0)
+
+			etlReq.Done = fOut.Batch.Done
+			etlReq.Offsets = append(etlReq.Offsets, fOut.Batch.NextOffset)
+			etlReq.Batches[fmt.Sprintf("batch-%d-%d", fOut.Batch.StartOffset, fOut.Batch.NextOffset)] = fOut.Batch
+
+			wIn = &domain.WriteInput[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]]{
+				Sink:  sinkCfg,
+				Batch: fOut.Batch,
+			}
+
+			wVal, err := env.ExecuteActivity(bo.WriteNextMongoSinkBatchAlias, wIn)
+			require.NoError(t, err)
+
+			q.PushBack(wVal)
+		} else {
+			if count < int(etlReq.MaxBatches) {
+				count++
+			} else {
+				count = 0
+				// Pause execution for 1 second
+				time.Sleep(1 * time.Second)
+			}
+			wVal := q.Remove(q.Front()).(converter.EncodedValue)
+			var wOut domain.WriteOutput[domain.CSVRow]
+			require.NoError(t, wVal.Get(&wOut))
+			require.Equal(t, true, len(wOut.Batch.Records) > 0)
+
+			batchId := fmt.Sprintf("batch-%d-%d", wOut.Batch.StartOffset, wOut.Batch.NextOffset)
+			if _, ok := etlReq.Batches[batchId]; !ok {
+				etlReq.Batches[batchId] = wOut.Batch
+			} else {
+				etlReq.Batches[batchId] = wOut.Batch
+			}
 		}
 	}
 
-	return nil
+	require.Equal(t, true, len(etlReq.Offsets) > 0)
+}
+
+func Test_FetchAndWrite_CloudCSVSource_MongoSink_Queue(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestActivityEnvironment()
+
+	l := logger.GetSlogLogger()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	ctx = logger.WithLogger(ctx, l)
+
+	env.SetWorkerOptions(worker.Options{
+		BackgroundActivityContext: ctx,
+		DeadlockDetectionTimeout:  24 * time.Hour, // set a long timeout to avoid deadlock detection during tests
+	})
+	env.SetTestTimeout(24 * time.Hour)
+
+	// Register concrete generic instantiations used by the test.
+	env.RegisterActivityWithOptions(
+		bo.FetchNextActivity[domain.CSVRow, sources.CloudCSVConfig],
+		activity.RegisterOptions{
+			Name: bo.FetchNextCloudCSVSourceBatchAlias,
+		},
+	)
+	env.RegisterActivityWithOptions(
+		bo.WriteActivity[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]],
+		activity.RegisterOptions{
+			Name: bo.WriteNextMongoSinkBatchAlias,
+		},
+	)
+
+	envCfg, err := utils.BuildCloudFileConfig()
+	require.NoError(t, err, "error building cloud CSV config for test environment")
+
+	path := filepath.Join(envCfg.Path, envCfg.Name)
+
+	sourceCfg := sources.CloudCSVConfig{
+		Path:         path,
+		Bucket:       envCfg.Bucket,
+		Provider:     string(sources.CloudSourceGCS),
+		Delimiter:    '|',
+		HasHeader:    true,
+		MappingRules: domain.BuildBusinessModelTransformRules(),
+	}
+
+	mCfg := utils.BuildMongoStoreConfig()
+	require.NotEmpty(t, mCfg.DBName, "MongoDB name should not be empty")
+	require.NotEmpty(t, mCfg.Host, "MongoDB host should not be empty")
+
+	sinkCfg := sinks.MongoSinkConfig[domain.CSVRow]{
+		Protocol:   mCfg.Protocol,
+		Host:       mCfg.Host,
+		DBName:     mCfg.DBName,
+		User:       mCfg.User,
+		Pwd:        mCfg.Pwd,
+		Params:     mCfg.Params,
+		Collection: "vypar.agents",
+	}
+
+	// batchSize should be larger than the largest row size in bytes
+	etlReq := &ETLRequest[domain.CSVRow]{
+		MaxBatches: 2,
+		BatchSize:  400,
+		Done:       false,
+		Offsets:    []uint64{},
+		Batches:    map[string]*domain.BatchProcess[domain.CSVRow]{},
+	}
+
+	etlReq.Offsets = append(etlReq.Offsets, uint64(0))
+
+	// initiate a new queue
+	q := list.New()
+
+	fIn := &domain.FetchInput[domain.CSVRow, sources.CloudCSVConfig]{
+		Source:    sourceCfg,
+		Offset:    etlReq.Offsets[len(etlReq.Offsets)-1],
+		BatchSize: etlReq.BatchSize,
+	}
+
+	fVal, err := env.ExecuteActivity(bo.FetchNextCloudCSVSourceBatchAlias, fIn)
+	require.NoError(t, err)
+
+	var fOut domain.FetchOutput[domain.CSVRow]
+	require.NoError(t, fVal.Get(&fOut))
+	require.Equal(t, true, len(fOut.Batch.Records) > 0)
+
+	// Store the fetched batch in ETL request
+	etlReq.Offsets = append(etlReq.Offsets, fOut.Batch.NextOffset)
+	etlReq.Done = fOut.Batch.Done
+
+	wIn := &domain.WriteInput[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]]{
+		Sink:  sinkCfg,
+		Batch: fOut.Batch,
+	}
+
+	wVal, err := env.ExecuteActivity(bo.WriteNextMongoSinkBatchAlias, wIn)
+	require.NoError(t, err)
+
+	q.PushBack(wVal)
+
+	count := 0
+	// while there are items in queue
+	for q.Len() > 0 {
+		if q.Len() < int(etlReq.MaxBatches) && !etlReq.Done {
+			fIn = &domain.FetchInput[domain.CSVRow, sources.CloudCSVConfig]{
+				Source:    sourceCfg,
+				Offset:    etlReq.Offsets[len(etlReq.Offsets)-1],
+				BatchSize: etlReq.BatchSize,
+			}
+
+			fVal, err := env.ExecuteActivity(bo.FetchNextCloudCSVSourceBatchAlias, fIn)
+			require.NoError(t, err)
+
+			var fOut domain.FetchOutput[domain.CSVRow]
+			require.NoError(t, fVal.Get(&fOut))
+			require.Equal(t, true, len(fOut.Batch.Records) > 0)
+
+			etlReq.Done = fOut.Batch.Done
+			etlReq.Offsets = append(etlReq.Offsets, fOut.Batch.NextOffset)
+			etlReq.Batches[fmt.Sprintf("batch-%d-%d", fOut.Batch.StartOffset, fOut.Batch.NextOffset)] = fOut.Batch
+
+			wIn = &domain.WriteInput[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]]{
+				Sink:  sinkCfg,
+				Batch: fOut.Batch,
+			}
+
+			wVal, err := env.ExecuteActivity(bo.WriteNextMongoSinkBatchAlias, wIn)
+			require.NoError(t, err)
+
+			q.PushBack(wVal)
+		} else {
+			if count < int(etlReq.MaxBatches) {
+				count++
+			} else {
+				count = 0
+				// Pause execution for 1 second
+				time.Sleep(1 * time.Second)
+			}
+			wVal := q.Remove(q.Front()).(converter.EncodedValue)
+			var wOut domain.WriteOutput[domain.CSVRow]
+			require.NoError(t, wVal.Get(&wOut))
+			require.Equal(t, true, len(wOut.Batch.Records) > 0)
+
+			batchId := fmt.Sprintf("batch-%d-%d", wOut.Batch.StartOffset, wOut.Batch.NextOffset)
+			if _, ok := etlReq.Batches[batchId]; !ok {
+				etlReq.Batches[batchId] = wOut.Batch
+			} else {
+				etlReq.Batches[batchId] = wOut.Batch
+			}
+		}
+	}
+
+}
+
+func writeTempCSV(t *testing.T, header []string, rows [][]string) string {
+	t.Helper()
+
+	// get current dir path
+	dir, err := os.Getwd()
+	require.NoError(t, err)
+
+	fp := filepath.Join(dir, "data", "data.csv")
+	f, err := os.Create(fp)
+	require.NoError(t, err)
+	defer f.Close()
+
+	write := func(cols []string) {
+		for i, c := range cols {
+			if i > 0 {
+				_, _ = f.WriteString(",")
+			}
+			_, _ = f.WriteString(c)
+		}
+		_, _ = f.WriteString("\n")
+	}
+
+	if len(header) > 0 {
+		write(header)
+	}
+	for _, r := range rows {
+		write(r)
+	}
+	require.NoError(t, f.Sync())
+	return fp
 }

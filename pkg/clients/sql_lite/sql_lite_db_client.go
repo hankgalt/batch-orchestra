@@ -1,25 +1,22 @@
-package clients
+package sqllite
 
 import (
 	"context"
 	"database/sql"
 	"fmt"
 
-	bo "github.com/hankgalt/batch-orchestra"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
 )
 
 type SQLLiteDBClient struct {
 	*sqlx.DB
-	source *FileSource
-	bo.BatchRequestProcessor
 }
 
 func NewSQLLiteDBClient(dbFile, tableName string) (*SQLLiteDBClient, error) {
 	// Check if the table name is provided
 	if tableName == "" {
-		return nil, ErrMissingFileName
+		return nil, fmt.Errorf("table name cannot be empty")
 	}
 
 	db, err := sqlx.Connect("sqlite3", dbFile)
@@ -29,54 +26,7 @@ func NewSQLLiteDBClient(dbFile, tableName string) (*SQLLiteDBClient, error) {
 
 	return &SQLLiteDBClient{
 		DB: db,
-		source: &FileSource{
-			FileName: tableName,
-		},
 	}, nil
-}
-
-func (db *SQLLiteDBClient) ReadData(ctx context.Context, offset, limit int64) (interface{}, int64, bool, error) {
-	if db.source.FileName == "agent" {
-		agents, err := db.FetchEntityAgentRecords(ctx, int(offset), int(limit))
-		if err != nil {
-			return nil, 0, false, err
-		}
-		return agents, int64(len(agents)), int64(len(agents)) < limit, nil
-	}
-
-	return nil, 0, false, fmt.Errorf("%s table not found", db.source.FileName)
-}
-
-func (db *SQLLiteDBClient) HandleData(ctx context.Context, start int64, data interface{}) (<-chan bo.Result, <-chan error, error) {
-	if db.source.FileName == "agent" {
-		recs, ok := data.([]Agent)
-		if !ok {
-			return nil, nil, ErrInvalidData
-		}
-
-		// Create a channel to stream the records and errors
-		recStream, errStream := make(chan bo.Result), make(chan error)
-
-		go func() {
-			defer func() {
-				close(recStream)
-				close(errStream)
-			}()
-
-			for i, rec := range recs {
-				// Process DB record
-				recStream <- bo.Result{
-					Start:  start + int64(i),
-					End:    start + int64(i+1),
-					Result: rec,
-				}
-			}
-		}()
-
-		return recStream, errStream, nil
-	}
-
-	return nil, nil, fmt.Errorf("%s table not found", db.source.FileName)
 }
 
 func (db *SQLLiteDBClient) Close() error {
@@ -99,11 +49,11 @@ func (db *SQLLiteDBClient) FetchEntityAgentRecords(ctx context.Context, offset, 
 	return agents, nil
 }
 
-func (db *SQLLiteDBClient) InsertAgentRecord(ctx context.Context, record map[string]interface{}) (sql.Result, error) {
+func (db *SQLLiteDBClient) InsertAgentRecord(ctx context.Context, record map[string]any) (sql.Result, error) {
 	return db.InsertEntityRecord(ctx, "agent", record)
 }
 
-func (db *SQLLiteDBClient) InsertEntityRecord(ctx context.Context, table string, record map[string]interface{}) (sql.Result, error) {
+func (db *SQLLiteDBClient) InsertEntityRecord(ctx context.Context, table string, record map[string]any) (sql.Result, error) {
 	var colIdx string
 	var cols string
 	values := []string{}
@@ -132,7 +82,7 @@ func (db *SQLLiteDBClient) InsertEntityRecord(ctx context.Context, table string,
 	return res, nil
 }
 
-func (db *SQLLiteDBClient) MapRecord(table string, record map[string]interface{}) []string {
+func (db *SQLLiteDBClient) MapRecord(table string, record map[string]any) []string {
 	cols := []string{}
 	if table == "agent" {
 		if entity_id := record["entity_id"]; entity_id.(int) > 0 {

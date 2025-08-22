@@ -6,5 +6,7 @@ go.sum
 data
 env
 creds
+certs
+logs
 
-.vscode
+mongo.env
