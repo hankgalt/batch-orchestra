@@ -33,6 +33,40 @@ func ProcessBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	l := workflow.GetLogger(ctx)
 	l.Debug("ProcessBatchWorkflow workflow started", "source", req.Source.Name(), "sink", req.Sink.Name())
 
+	resp, err := processBatchWorkflow(ctx, req)
+	if err != nil {
+		switch wkflErr := err.(type) {
+		case *temporal.ApplicationError:
+			l.Error(
+				"ProcessBatchWorkflow - temporal application error",
+				"error", err.Error(),
+				"type", fmt.Sprintf("%T", err),
+			)
+			switch wkflErr.Type() {
+			// TODO check for known application error messages & act
+			default:
+			}
+		default:
+			l.Error(
+				"ProcessBatchWorkflow - temporal error",
+				"error", err.Error(),
+				"type", fmt.Sprintf("%T", err),
+			)
+		}
+		return resp, err
+	}
+
+	l.Debug("ProcessBatchWorkflow workflow completed", "source", resp.Source.Name(), "sink", resp.Sink.Name())
+	return resp, nil
+}
+
+// ProcessBatchWorkflow processes a batch of records from a source to a sink.
+func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T]](
+	ctx workflow.Context,
+	req *domain.BatchProcessingRequest[T, S, D],
+) (*domain.BatchProcessingRequest[T, S, D], error) {
+	l := workflow.GetLogger(ctx)
+
 	// setup activity options
 	// TODO update activity options
 	ao := workflow.ActivityOptions{
@@ -42,6 +76,7 @@ func ProcessBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		},
 	}
 	ctx = workflow.WithActivityOptions(ctx, ao)
+	l.Debug("processBatchWorkflow context set with activity options", "source", req.Source.Name(), "sink", req.Sink.Name())
 
 	// setup request state
 	if req.Batches == nil {
@@ -62,6 +97,7 @@ func ProcessBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 
 	// Initiate a new queue
 	q := list.New()
+	l.Debug("processBatchWorkflow queue initiated", "source", req.Source.Name(), "sink", req.Sink.Name())
 
 	// Fetch first batch from source
 	var fetched domain.FetchOutput[T]
@@ -84,6 +120,7 @@ func ProcessBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		Batch: fetched.Batch,
 	})
 	q.PushBack(future)
+	l.Debug("processBatchWorkflow first batch pushed to queue", "source", req.Source.Name(), "sink", req.Sink.Name())
 
 	// While there are items in queue
 	for q.Len() > 0 {
@@ -132,7 +169,7 @@ func ProcessBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 
 	// TODO setup continue as new
 
-	l.Debug("ProcessBatchWorkflow workflow completed", "source", req.Source.Name(), "sink", req.Sink.Name())
+	l.Debug("processBatchWorkflow workflow processed", "source", req.Source.Name(), "sink", req.Sink.Name())
 	return req, nil
 }
 

@@ -66,10 +66,194 @@ func (s *cloudCSVSource) Close(ctx context.Context) error {
 // Name of the source.
 func (s *cloudCSVSource) Name() string { return CloudCSVSource }
 
+func (s *cloudCSVSource) NextStream(
+	ctx context.Context,
+	offset uint64,
+	size uint,
+) (<-chan *domain.BatchRecord[domain.CSVRow], error) {
+	// If size is 0 or negative, return an empty batch.
+	if size <= 0 {
+		return nil, fmt.Errorf("cloud csv: size must be greater than 0")
+	}
+
+	// Ensure client is initialized
+	if s.client == nil {
+		return nil, errors.New("cloud csv: client is not initialized")
+	}
+
+	// If headers are enabled but transformer function is not set.
+	if s.hasHeader && s.transFunc == nil {
+		return nil, fmt.Errorf("cloud csv: transformer function is not set for cloud CSV source with headers")
+	}
+
+	// Ensure object exists in the bucket
+	obj := s.client.Bucket(s.bucket).Object(s.path)
+	if _, err := obj.Attrs(ctx); err != nil {
+		return nil, fmt.Errorf("cloud csv: object does not exist or error getting attributes: %w", err)
+	}
+
+	// Create a reader for the object
+	rc, err := obj.NewReader(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("cloud csv: error creating reader for object %s in bucket %s: %w", s.path, s.bucket, err)
+	}
+	defer func() {
+		if err := rc.Close(); err != nil {
+			log.Printf("cloud csv: error closing reader: %v", err)
+		}
+	}()
+
+	// Set start index & done flag.
+	startIndex := int64(offset)
+	done := false
+
+	// Create a read-at adapter for the GCP Storage reader.
+	// This allows us to read data at specific offsets.
+	readAtAdapter := &GCPStorageReadAtAdapter{
+		Reader: rc,
+	}
+
+	// Read data bytes from the object at the specified offset
+	data := make([]byte, size)
+	numBytesRead, err := readAtAdapter.ReadAt(data, startIndex)
+	if err != nil && err != io.EOF {
+		return nil, fmt.Errorf("error reading object %s in bucket %s at offset %d: %w", s.path, s.bucket, startIndex, err)
+	}
+
+	// If read data is less than requested, cursor reached EOF, set Done
+	if uint(numBytesRead) < size {
+		done = true
+	}
+
+	// get last line break index to avoid partial record
+	i := bytes.LastIndex(data, []byte{'\n'})
+	if i < 0 {
+		// If no newline found, read till the end, set nextOffset to numBytesRead
+		i = numBytesRead - 1
+	}
+
+	resStream := make(chan *domain.BatchRecord[domain.CSVRow])
+
+	if done {
+		resStream <- &domain.BatchRecord[domain.CSVRow]{
+			Start: offset,
+			End:   offset,
+			Done:  done,
+		}
+	}
+
+	go func() {
+		defer close(resStream)
+
+		// create data buffer for bytes upto last line break
+		buffer := bytes.NewBuffer(data[:i+1])
+
+		// Create a CSV reader with the buffer
+		csvReader := csv.NewReader(buffer)
+		csvReader.Comma = s.delimiter
+		csvReader.FieldsPerRecord = -1 // Read all fields
+
+		// Initialize start & next offsets
+		nextOffset := csvReader.InputOffset()
+
+		// Initialize read count and records slice
+		readCount := 0
+
+		// Read records from the CSV reader
+		for {
+			// allow cancellation
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			rec, err := csvReader.Read()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					return
+				}
+				// Attempt record cleanup if error occurs
+				cleanedStr := utils.CleanRecord(string(data[nextOffset:csvReader.InputOffset()]))
+				record, err := utils.ReadSingleRecord(cleanedStr)
+				if err != nil {
+					resStream <- &domain.BatchRecord[domain.CSVRow]{
+						Start: uint64(nextOffset),
+						End:   uint64(csvReader.InputOffset()),
+						BatchResult: domain.BatchResult{
+							Error: fmt.Sprintf("read data row: %v", err),
+						},
+					}
+
+					// Update startIndex to the next record's offset
+					startIndex = nextOffset
+
+					// update nextOffset to the next record's offset
+					nextOffset = csvReader.InputOffset()
+					// update row read count
+					readCount++
+
+					continue
+				}
+
+				rec = record
+			}
+
+			// startIndex & nextOffset will be 0 for the first read, skip headers
+			if startIndex <= 0 && nextOffset <= 0 && s.hasHeader {
+				// Update startIndex to the next record's offset
+				startIndex = nextOffset
+
+				// update nextOffset to the next record's offset
+				nextOffset = csvReader.InputOffset()
+
+				// update row read count
+				readCount++
+
+				continue
+			}
+
+			// Update startIndex to the next record's offset
+			startIndex = nextOffset
+
+			// update nextOffset to the next record's offset
+			nextOffset = csvReader.InputOffset()
+
+			// update row read count
+			readCount++
+
+			// Create a CSVRow from the transformed record
+			rec = utils.CleanAlphaNumericsArr(rec, []rune{'.', '-', '_', '#', '&', '@'})
+			res := s.transFunc(rec)
+
+			row := domain.CSVRow{}
+			for k, v := range res {
+				st, ok := v.(string)
+				if !ok {
+					row[k] = ""
+				}
+				row[k] = st
+			}
+
+			resStream <- &domain.BatchRecord[domain.CSVRow]{
+				Start: uint64(startIndex),
+				End:   uint64(csvReader.InputOffset()),
+				Data:  row,
+			}
+		}
+	}()
+
+	return resStream, nil
+}
+
 // Next reads the next batch of CSV rows from the cloud storage (S3/GCS/Azure).
 // It reads from the cloud storage at the specified offset and returns a batch of CSVRow.
 // Currently only supports GCP Storage. Ensure the environment variable is set for GCP credentials
-func (s *cloudCSVSource) Next(ctx context.Context, offset uint64, size uint) (*domain.BatchProcess[domain.CSVRow], error) {
+func (s *cloudCSVSource) Next(
+	ctx context.Context,
+	offset uint64,
+	size uint,
+) (*domain.BatchProcess[domain.CSVRow], error) {
 	bp := &domain.BatchProcess[domain.CSVRow]{
 		Records:     nil,
 		NextOffset:  offset,

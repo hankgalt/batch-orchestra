@@ -29,6 +29,42 @@ type mongoSink[T any] struct {
 // Name returns the name of the mongo sink.
 func (s *mongoSink[T]) Name() string { return MongoSink }
 
+func (s *mongoSink[T]) WriteStream(ctx context.Context, start uint64, data []T) (<-chan domain.BatchResult, error) {
+	resStream := make(chan domain.BatchResult)
+
+	go func() {
+		defer close(resStream)
+
+		for i, rec := range data {
+			// allow cancellation
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			doc, err := toMapAny(rec)
+			if err != nil {
+				resStream <- domain.BatchResult{
+					Error: fmt.Sprintf("record %d convert: %s", i, err.Error()),
+				}
+				continue
+			}
+
+			res, err := s.client.AddCollectionDoc(ctx, s.collection, doc)
+			if err != nil {
+				resStream <- domain.BatchResult{Error: fmt.Sprintf("record %d insert: %s", i, err.Error())}
+				continue
+			}
+			resStream <- domain.BatchResult{
+				Result: res,
+			}
+		}
+	}()
+
+	return resStream, nil
+}
+
 // Write writes the batch of records to MongoDB.
 func (s *mongoSink[T]) Write(ctx context.Context, b *domain.BatchProcess[T]) (*domain.BatchProcess[T], error) {
 	if s == nil {

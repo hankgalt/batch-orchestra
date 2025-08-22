@@ -34,9 +34,172 @@ func (s *localCSVSource) Close(ctx context.Context) error {
 	return nil
 }
 
+func (s *localCSVSource) NextStream(
+	ctx context.Context,
+	offset uint64,
+	size uint,
+) (<-chan *domain.BatchRecord[domain.CSVRow], error) {
+	// If size is 0 or negative, return an empty batch.
+	if size <= 0 {
+		return nil, fmt.Errorf("size must be greater than 0")
+	}
+
+	// Open the local CSV file.
+	f, err := os.Open(s.path)
+	if err != nil {
+		return nil, fmt.Errorf("open file: %w", err)
+	}
+	defer f.Close()
+
+	// If headers are enabled but transformer function is not set.
+	if s.hasHeader && s.transFunc == nil {
+		return nil, fmt.Errorf("transformer function is not set for local CSV source with headers")
+	}
+
+	// Set start index to the specified offset.
+	startIndex := int64(offset)
+
+	// Read data bytes from the file at the specified offset
+	data := make([]byte, size)
+	numBytesRead, err := f.ReadAt(data, startIndex)
+	if err != nil && err != io.EOF {
+		return nil, fmt.Errorf("error reading file %s at offset %d: %w", s.path, startIndex, err)
+	}
+
+	// If read data is less than requested, it means we reached EOF, set Done
+	done := false
+	if uint(numBytesRead) < size {
+		done = true
+	}
+
+	// get last line break index to drop partial record
+	i := bytes.LastIndex(data, []byte{'\n'})
+	if i < 0 {
+		// If no newline found, we read till the end, set nextOffset to numBytesRead
+		i = numBytesRead - 1
+	}
+
+	resStream := make(chan *domain.BatchRecord[domain.CSVRow])
+
+	if done {
+		resStream <- &domain.BatchRecord[domain.CSVRow]{
+			Start: offset,
+			End:   offset,
+			Done:  done,
+		}
+	}
+
+	go func() {
+		defer close(resStream)
+
+		// create data buffer for bytes upto last line break
+		buffer := bytes.NewBuffer(data[:i+1])
+
+		// Create a CSV reader with the buffer
+		csvReader := csv.NewReader(buffer)
+		csvReader.Comma = s.delimiter
+		csvReader.FieldsPerRecord = -1 // Allow variable number of fields per record
+
+		// Initialize start & next offsets
+		nextOffset := csvReader.InputOffset()
+
+		// Initialize read count and records slice
+		readCount := 0
+
+		// Read records from the CSV reader
+		for {
+			// allow cancellation
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			rec, err := csvReader.Read()
+			if err != nil {
+				if errors.Is(err, io.EOF) {
+					return
+				}
+				// Attempt record cleanup if error occurs
+				cleanedStr := utils.CleanRecord(string(data[nextOffset:csvReader.InputOffset()]))
+				record, err := utils.ReadSingleRecord(cleanedStr)
+				if err != nil {
+					resStream <- &domain.BatchRecord[domain.CSVRow]{
+						Start: uint64(nextOffset),
+						End:   uint64(csvReader.InputOffset()),
+						BatchResult: domain.BatchResult{
+							Error: fmt.Sprintf("read data row: %v", err),
+						},
+					}
+
+					// Update startIndex to the next record's offset
+					startIndex = nextOffset
+
+					// update nextOffset to the next record's offset
+					nextOffset = csvReader.InputOffset()
+					// update row read count
+					readCount++
+
+					continue
+				}
+
+				rec = record
+			}
+
+			// startIndex & nextOffset will be 0 for the first read, skip headers
+			if startIndex <= 0 && nextOffset <= 0 && s.hasHeader {
+				// Update startIndex to the next record's offset
+				startIndex = nextOffset
+
+				// update nextOffset to the next record's offset
+				nextOffset = csvReader.InputOffset()
+
+				// update row read count
+				readCount++
+
+				continue
+			}
+
+			// Update startIndex to the next record's offset
+			startIndex = nextOffset
+
+			// update nextOffset to the next record's offset
+			nextOffset = csvReader.InputOffset()
+
+			// update row read count
+			readCount++
+
+			// Create a CSVRow from the transformed record
+			rec = utils.CleanAlphaNumericsArr(rec, []rune{'.', '-', '_', '#', '&', '@'})
+			res := s.transFunc(rec)
+
+			row := domain.CSVRow{}
+			for k, v := range res {
+				st, ok := v.(string)
+				if !ok {
+					row[k] = ""
+				}
+				row[k] = st
+			}
+
+			resStream <- &domain.BatchRecord[domain.CSVRow]{
+				Start: uint64(startIndex),
+				End:   uint64(csvReader.InputOffset()),
+				Data:  row,
+			}
+		}
+	}()
+
+	return resStream, nil
+}
+
 // Next reads the next batch of CSV rows from the local file.
 // It reads from the file at the specified offset and returns a batch of CSVRow.
-func (s *localCSVSource) Next(ctx context.Context, offset uint64, size uint) (*domain.BatchProcess[domain.CSVRow], error) {
+func (s *localCSVSource) Next(
+	ctx context.Context,
+	offset uint64,
+	size uint,
+) (*domain.BatchProcess[domain.CSVRow], error) {
 	bp := &domain.BatchProcess[domain.CSVRow]{
 		Records:     nil,
 		NextOffset:  offset,
@@ -204,7 +367,9 @@ func (c LocalCSVConfig) Name() string { return LocalCSVSource }
 
 // BuildSource builds a local CSV source from the config.
 // It reads headers if HasHeader is true and caches it.
-func (c LocalCSVConfig) BuildSource(ctx context.Context) (domain.Source[domain.CSVRow], error) {
+func (c LocalCSVConfig) BuildSource(
+	ctx context.Context,
+) (domain.Source[domain.CSVRow], error) {
 	if c.Path == "" {
 		return nil, errors.New("local csv: path is required")
 	}

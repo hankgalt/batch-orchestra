@@ -18,6 +18,7 @@ type BatchRecord[T any] struct {
 	Data        T
 	Start, End  uint64
 	BatchResult BatchResult
+	Done        bool
 }
 
 // BatchProcess[T any] is the neutral "batch process" unit.
@@ -44,6 +45,11 @@ type Source[T any] interface {
 	Close(context.Context) error
 }
 
+// NextStreamer[T any] is an interface for streaming the next batch of records.
+type NextStreamer[T any] interface {
+	NextStream(ctx context.Context, offset uint64, n uint) (<-chan *BatchRecord[T], error)
+}
+
 // SinkConfig[T any] is a config that *knows how to build* a Sink for a specific T.
 type SinkConfig[T any] interface {
 	BuildSink(ctx context.Context) (Sink[T], error)
@@ -56,6 +62,11 @@ type Sink[T any] interface {
 	Write(ctx context.Context, b *BatchProcess[T]) (*BatchProcess[T], error)
 	Name() string
 	Close(context.Context) error
+}
+
+// WriteStreamer[T any] is an interface for streaming writes of batches of T.
+type WriteStreamer[T any] interface {
+	WriteStream(ctx context.Context, start uint64, data []T) (<-chan BatchResult, error)
 }
 
 // WriteInput[T any, D SinkConfig[T]] is the input for the WriteActivity.

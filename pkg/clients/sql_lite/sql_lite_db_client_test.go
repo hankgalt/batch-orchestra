@@ -3,7 +3,7 @@ package sqllite_test
 import (
 	"testing"
 
-	sqllite "github.com/hankgalt/batch-orchestra/clients/sql_lite"
+	sqllite "github.com/hankgalt/batch-orchestra/pkg/clients/sql_lite"
 	"github.com/stretchr/testify/require"
 )
 

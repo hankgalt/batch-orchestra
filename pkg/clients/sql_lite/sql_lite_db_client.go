@@ -73,7 +73,7 @@ func (db *SQLLiteDBClient) InsertEntityRecord(ctx context.Context, table string,
 
 	qryStr := "INSERT INTO " + table + " (" + cols + ") VALUES (" + colIdx + ")"
 	tx := db.DB.MustBegin()
-	res := tx.MustExec(qryStr, record["entity_id"].(int), values[0], values[1], values[2], values[3])
+	res := tx.MustExec(qryStr, record["entity_id"].(int), values[0], values[1], values[2])
 	err := tx.Commit()
 	if err != nil {
 		return nil, err
@@ -91,11 +91,8 @@ func (db *SQLLiteDBClient) MapRecord(table string, record map[string]any) []stri
 		if entity_name := record["entity_name"]; entity_name.(string) != "" {
 			cols = append(cols, "entity_name")
 		}
-		if first_name := record["first_name"]; first_name.(string) != "" {
-			cols = append(cols, "first_name")
-		}
-		if last_name := record["last_name"]; last_name.(string) != "" {
-			cols = append(cols, "last_name")
+		if name := record["name"]; name.(string) != "" {
+			cols = append(cols, "name")
 		}
 		if agent_type := record["agent_type"]; agent_type.(string) != "" {
 			cols = append(cols, "agent_type")
@@ -107,8 +104,7 @@ func (db *SQLLiteDBClient) MapRecord(table string, record map[string]any) []stri
 type Agent struct {
 	EntityId   int    `db:"entity_id"`
 	EntityName string `db:"entity_name"`
-	FirstName  string `db:"first_name"`
-	LastName   string `db:"last_name"`
+	Name       string `db:"name"`
 	AgentType  string `db:"agent_type"`
 }
 
@@ -117,8 +113,7 @@ var AgentSchema = `
 	CREATE TABLE agent (
 		entity_id   INTEGER PRIMARY KEY,
 		entity_name VARCHAR(250) DEFAULT '',
-		first_name  VARCHAR(80)  DEFAULT '',
-		last_name   VARCHAR(80)  DEFAULT '',
+		name  		VARCHAR(250)  DEFAULT '',
 		agent_type  VARCHAR(250) DEFAULT ''
 	);
 	`

@@ -16,6 +16,29 @@ type noopSink[T any] struct{}
 // Name returns the name of the noop sink.
 func (s *noopSink[T]) Name() string { return NoopSink }
 
+func (s *noopSink[T]) WriteStream(ctx context.Context, start uint64, data []T) (<-chan domain.BatchResult, error) {
+	resStream := make(chan domain.BatchResult)
+
+	go func() {
+		defer close(resStream)
+
+		for _, rec := range data {
+			// allow cancellation
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			resStream <- domain.BatchResult{
+				Result: rec,
+			}
+		}
+	}()
+
+	return resStream, nil
+}
+
 // Write does nothing and returns the count of records as written.
 func (s *noopSink[T]) Write(ctx context.Context, b *domain.BatchProcess[T]) (*domain.BatchProcess[T], error) {
 	for _, rec := range b.Records {
