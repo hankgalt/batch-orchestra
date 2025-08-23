@@ -94,15 +94,16 @@ type FetchOutput[T any] struct {
 
 // BatchProcessingRequest[T any, S SourceConfig[T], D SinkConfig[T]] is a request to process a batch of T from a source S and write to a sink D.
 type BatchProcessingRequest[T any, S SourceConfig[T], D SinkConfig[T]] struct {
-	MaxBatches uint                        // maximum number of batches to process
-	BatchSize  uint                        // maximum size of each batch
-	JobID      string                      // unique identifier for the job
-	StartAt    uint64                      // initial offset
-	Source     S                           // source configuration
-	Sink       D                           // sink configuration
-	Done       bool                        // whether the job is done
-	Offsets    []uint64                    // list of offsets for each batch
-	Batches    map[string]*BatchProcess[T] // map of batch by ID
+	MaxInProcessBatches uint                        // maximum number of batches to process
+	BatchSize           uint                        // maximum size of each batch
+	MaxBatches          uint                        // max number of batches to processed be waorkflow (continue as new limit)
+	JobID               string                      // unique identifier for the job
+	StartAt             uint64                      // initial offset
+	Source              S                           // source configuration
+	Sink                D                           // sink configuration
+	Done                bool                        // whether the job is done
+	Offsets             []uint64                    // list of offsets for each batch
+	Batches             map[string]*BatchProcess[T] // map of batch by ID
 }
 
 type Rule struct {
@@ -114,18 +115,6 @@ type Rule struct {
 
 // TransformerFunc transforms a slice of values into a key-value map based on, in closure, headers and rules.
 type TransformerFunc func(values []string) map[string]any
-
-// A request to process a batch of CSVRow from a local CSV file.
-// type LocalCSVRequest = BatchProcessingRequest[CSVRow, LocalCSVConfig, NoopSinkConfig[CSVRow]]
-
-// // A request to process a batch of CSVRow from a cloud CSV source (S3/GCS/Azure).
-// type CloudCSVRequest = BatchProcessingRequest[CSVRow, CloudCSVConfig, NoopSinkConfig[CSVRow]]
-
-// A request to process a batch of CSVRow and write to a MongoDB sink.
-// type LocalCSVMongoRequest = BatchProcessingRequest[CSVRow, sources.LocalCSVConfig, sinks.MongoSinkConfig[CSVRow]]
-
-// // A request to process a batch of CSVRow from a cloud CSV source and write to a MongoDB sink.
-// type CloudCSVMongoRequest = BatchProcessingRequest[CSVRow, CloudCSVConfig, MongoSinkConfig[CSVRow]]
 
 type CloudFileConfig struct {
 	Name   string

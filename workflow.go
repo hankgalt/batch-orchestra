@@ -25,13 +25,24 @@ var (
 	ErrFailedRemoveFuture = errors.New(FAILED_REMOVE_FUTURE)
 )
 
+const WorkflowBatchLimit = uint(100)
+const MinimumInProcessBatches = uint(2)
+
 // ProcessBatchWorkflow processes a batch of records from a source to a sink.
 func ProcessBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T]](
 	ctx workflow.Context,
 	req *domain.BatchProcessingRequest[T, S, D],
 ) (*domain.BatchProcessingRequest[T, S, D], error) {
 	l := workflow.GetLogger(ctx)
-	l.Debug("ProcessBatchWorkflow workflow started", "source", req.Source.Name(), "sink", req.Sink.Name())
+
+	wkflname := workflow.GetInfo(ctx).WorkflowType.Name
+
+	l.Debug(
+		"ProcessBatchWorkflow workflow started",
+		"source", req.Source.Name(),
+		"sink", req.Sink.Name(),
+		"workflow", wkflname,
+	)
 
 	resp, err := processBatchWorkflow(ctx, req)
 	if err != nil {
@@ -39,6 +50,7 @@ func ProcessBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		case *temporal.ApplicationError:
 			l.Error(
 				"ProcessBatchWorkflow - temporal application error",
+				"workflow", wkflname,
 				"error", err.Error(),
 				"type", fmt.Sprintf("%T", err),
 			)
@@ -49,6 +61,7 @@ func ProcessBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		default:
 			l.Error(
 				"ProcessBatchWorkflow - temporal error",
+				"workflow", wkflname,
 				"error", err.Error(),
 				"type", fmt.Sprintf("%T", err),
 			)
@@ -56,7 +69,12 @@ func ProcessBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		return resp, err
 	}
 
-	l.Debug("ProcessBatchWorkflow workflow completed", "source", resp.Source.Name(), "sink", resp.Sink.Name())
+	l.Debug(
+		"ProcessBatchWorkflow workflow completed",
+		"source", resp.Source.Name(),
+		"sink", resp.Sink.Name(),
+		"workflow", wkflname,
+	)
 	return resp, nil
 }
 
@@ -67,6 +85,8 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 ) (*domain.BatchProcessingRequest[T, S, D], error) {
 	l := workflow.GetLogger(ctx)
 
+	wkflname := workflow.GetInfo(ctx).WorkflowType.Name
+
 	// setup activity options
 	// TODO update activity options
 	ao := workflow.ActivityOptions{
@@ -76,7 +96,13 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		},
 	}
 	ctx = workflow.WithActivityOptions(ctx, ao)
-	l.Debug("processBatchWorkflow context set with activity options", "source", req.Source.Name(), "sink", req.Sink.Name())
+	l.Debug(
+		"processBatchWorkflow context set with activity options",
+		"source", req.Source.Name(),
+		"sink", req.Sink.Name(),
+		"start-at", req.StartAt,
+		"workflow", wkflname,
+	)
 
 	// setup request state
 	if req.Batches == nil {
@@ -86,8 +112,11 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		req.Offsets = []uint64{}
 		req.Offsets = append(req.Offsets, req.StartAt)
 	}
-	if req.MaxBatches < 2 {
-		req.MaxBatches = 2
+	if req.MaxInProcessBatches < MinimumInProcessBatches {
+		req.MaxInProcessBatches = MinimumInProcessBatches
+	}
+	if req.MaxBatches > WorkflowBatchLimit || req.MaxBatches < MinimumInProcessBatches {
+		req.MaxBatches = WorkflowBatchLimit
 	}
 
 	// Get the fetch and write activity aliases based on the source and sink
@@ -96,8 +125,14 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	// TODO retry case, check for error
 
 	// Initiate a new queue
+	batchCount := uint(0)
 	q := list.New()
-	l.Debug("processBatchWorkflow queue initiated", "source", req.Source.Name(), "sink", req.Sink.Name())
+	l.Debug(
+		"processBatchWorkflow queue initiated",
+		"source", req.Source.Name(),
+		"sink", req.Sink.Name(),
+		"workflow", wkflname,
+	)
 
 	// Fetch first batch from source
 	var fetched domain.FetchOutput[T]
@@ -108,6 +143,7 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	}).Get(ctx, &fetched); err != nil {
 		return req, err
 	}
+	batchCount++
 
 	// Update request state with fetched batch
 	req.Offsets = append(req.Offsets, fetched.Batch.NextOffset)
@@ -120,11 +156,16 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		Batch: fetched.Batch,
 	})
 	q.PushBack(future)
-	l.Debug("processBatchWorkflow first batch pushed to queue", "source", req.Source.Name(), "sink", req.Sink.Name())
+	l.Debug(
+		"processBatchWorkflow first batch pushed to queue",
+		"source", req.Source.Name(),
+		"sink", req.Sink.Name(),
+		"workflow", wkflname,
+	)
 
 	// While there are items in queue
 	for q.Len() > 0 {
-		if q.Len() < int(req.MaxBatches) && !req.Done {
+		if q.Len() < int(req.MaxInProcessBatches) && !req.Done && batchCount < req.MaxBatches {
 			// If # of items in queue are less than concurrent processing limit & there's more data
 			// Fetch the next batch from the source
 			if err := workflow.ExecuteActivity(ctx, fetchActivityAlias, &domain.FetchInput[T, S]{
@@ -134,6 +175,7 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 			}).Get(ctx, &fetched); err != nil {
 				return req, err
 			}
+			batchCount++
 
 			// Update request state with fetched batch
 			req.Offsets = append(req.Offsets, fetched.Batch.NextOffset)
@@ -167,9 +209,32 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		}
 	}
 
-	// TODO setup continue as new
+	if !req.Done && batchCount >= req.MaxBatches {
+		// continue as new
+		startAt := req.Offsets[len(req.Offsets)-1]
+		lastBatch := req.Batches[getBatchId(req.Offsets[len(req.Offsets)-2], req.Offsets[len(req.Offsets)-1], "", "")]
+		l.Debug(
+			"processBatchWorkflow continuing as new",
+			"source", req.Source.Name(),
+			"sink", req.Sink.Name(),
+			"next-offset-offsets", startAt,
+			"next-offset-batches", lastBatch.NextOffset,
+			"batches-processed", batchCount,
+			"workflow", wkflname,
+		)
 
-	l.Debug("processBatchWorkflow workflow processed", "source", req.Source.Name(), "sink", req.Sink.Name())
+		req.StartAt = startAt
+
+		return nil, workflow.NewContinueAsNewError(ctx, wkflname, req)
+	}
+
+	l.Debug(
+		"processBatchWorkflow workflow processed",
+		"source", req.Source.Name(),
+		"sink", req.Sink.Name(),
+		"workflow", wkflname,
+		"batch-count", batchCount,
+	)
 	return req, nil
 }
 
