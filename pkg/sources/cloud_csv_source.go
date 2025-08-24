@@ -125,15 +125,7 @@ func (s *cloudCSVSource) NextStream(
 		done = true
 	}
 
-	// get last line break index to avoid partial record
-	i := bytes.LastIndex(data, []byte{'\n'})
-	if i < 0 {
-		// If no newline found, read till the end, set nextOffset to numBytesRead
-		i = numBytesRead - 1
-	}
-
 	resStream := make(chan *domain.BatchRecord[domain.CSVRow])
-
 	if done {
 		resStream <- &domain.BatchRecord[domain.CSVRow]{
 			Start: offset,
@@ -145,101 +137,18 @@ func (s *cloudCSVSource) NextStream(
 	go func() {
 		defer close(resStream)
 
-		// create data buffer for bytes upto last line break
-		buffer := bytes.NewBuffer(data[:i+1])
-
-		// Create a CSV reader with the buffer
-		csvReader := csv.NewReader(buffer)
-		csvReader.Comma = s.delimiter
-		csvReader.FieldsPerRecord = -1 // Read all fields
-
-		// Initialize start & next offsets
-		nextOffset := csvReader.InputOffset()
-
-		// Initialize read count and records slice
-		readCount := 0
-
-		// Read records from the CSV reader
-		for {
-			// allow cancellation
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
-
-			rec, err := csvReader.Read()
-			if err != nil {
-				if errors.Is(err, io.EOF) {
-					return
-				}
-				// Attempt record cleanup if error occurs
-				cleanedStr := utils.CleanRecord(string(data[nextOffset:csvReader.InputOffset()]))
-				record, err := utils.ReadSingleRecord(cleanedStr)
-				if err != nil {
-					resStream <- &domain.BatchRecord[domain.CSVRow]{
-						Start: uint64(nextOffset),
-						End:   uint64(csvReader.InputOffset()),
-						BatchResult: domain.BatchResult{
-							Error: fmt.Sprintf("read data row: %v", err),
-						},
-					}
-
-					// Update startIndex to the next record's offset
-					startIndex = nextOffset
-
-					// update nextOffset to the next record's offset
-					nextOffset = csvReader.InputOffset()
-					// update row read count
-					readCount++
-
-					continue
-				}
-
-				rec = record
-			}
-
-			// startIndex & nextOffset will be 0 for the first read, skip headers
-			if startIndex <= 0 && nextOffset <= 0 && s.hasHeader {
-				// Update startIndex to the next record's offset
-				startIndex = nextOffset
-
-				// update nextOffset to the next record's offset
-				nextOffset = csvReader.InputOffset()
-
-				// update row read count
-				readCount++
-
-				continue
-			}
-
-			// Update startIndex to the next record's offset
-			startIndex = nextOffset
-
-			// update nextOffset to the next record's offset
-			nextOffset = csvReader.InputOffset()
-
-			// update row read count
-			readCount++
-
-			// Create a CSVRow from the transformed record
-			rec = utils.CleanAlphaNumericsArr(rec, []rune{'.', '-', '_', '#', '&', '@'})
-			res := s.transFunc(rec)
-
-			row := domain.CSVRow{}
-			for k, v := range res {
-				st, ok := v.(string)
-				if !ok {
-					row[k] = ""
-				}
-				row[k] = st
-			}
-
-			resStream <- &domain.BatchRecord[domain.CSVRow]{
-				Start: uint64(startIndex),
-				End:   uint64(csvReader.InputOffset()),
-				Data:  row,
-			}
+		err := ReadCSVStream(
+			ctx,
+			data,
+			numBytesRead,
+			int64(offset),
+			s.delimiter,
+			s.hasHeader,
+			s.transFunc,
+			resStream,
+		)
+		if err != nil {
+			log.Printf("error reading CSV data stream - path: %s, offset: %d, error: %s", s.path, offset, err.Error())
 		}
 	}()
 
@@ -293,8 +202,7 @@ func (s *cloudCSVSource) Next(
 		}
 	}()
 
-	// Set start index & done flag.
-	startIndex := int64(offset)
+	// Set done flag.
 	done := false
 
 	// Create a read-at adapter for the GCP Storage reader.
@@ -305,9 +213,9 @@ func (s *cloudCSVSource) Next(
 
 	// Read data bytes from the object at the specified offset
 	data := make([]byte, size)
-	numBytesRead, err := readAtAdapter.ReadAt(data, startIndex)
+	numBytesRead, err := readAtAdapter.ReadAt(data, int64(offset))
 	if err != nil && err != io.EOF {
-		return bp, fmt.Errorf("error reading object %s in bucket %s at offset %d: %w", s.path, s.bucket, startIndex, err)
+		return bp, fmt.Errorf("error reading object %s in bucket %s at offset %d: %w", s.path, s.bucket, offset, err)
 	}
 
 	// If read data is less than requested, cursor reached EOF, set Done
@@ -315,116 +223,25 @@ func (s *cloudCSVSource) Next(
 		done = true
 	}
 
-	// get last line break index to avoid partial record
-	i := bytes.LastIndex(data, []byte{'\n'})
-	if i < 0 {
-		// If no newline found, read till the end, set nextOffset to numBytesRead
-		i = numBytesRead - 1
+	records, nextOffset, err := ReadCSVBatch(
+		ctx,
+		data,
+		numBytesRead,
+		int64(offset),
+		s.delimiter,
+		s.hasHeader,
+		s.transFunc,
+	)
+	if err != nil {
+		bp.Records = records
+		bp.NextOffset = nextOffset
+		bp.Done = done
+
+		return bp, err
 	}
 
-	// create data buffer for bytes upto last line break
-	buffer := bytes.NewBuffer(data[:i+1])
-
-	// Create a CSV reader with the buffer
-	csvReader := csv.NewReader(buffer)
-	csvReader.Comma = s.delimiter
-	csvReader.FieldsPerRecord = -1 // Read all fields
-
-	// Initialize start & next offsets
-	nextOffset := csvReader.InputOffset()
-
-	// Initialize read count and records slice
-	readCount := 0
-
-	// Read records from the CSV reader
-	for {
-		// allow cancellation
-		select {
-		case <-ctx.Done():
-			return bp, ctx.Err()
-		default:
-		}
-
-		rec, err := csvReader.Read()
-		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			// Attempt record cleanup if error occurs
-			cleanedStr := utils.CleanRecord(string(data[nextOffset:csvReader.InputOffset()]))
-			record, err := utils.ReadSingleRecord(cleanedStr)
-			if err != nil {
-				bp.Records = append(bp.Records, &domain.BatchRecord[domain.CSVRow]{
-					Start: uint64(startIndex),
-					End:   uint64(csvReader.InputOffset()),
-					BatchResult: domain.BatchResult{
-						Error: fmt.Sprintf("read data row: %v", err),
-					},
-				})
-
-				// Update startIndex to the next record's offset
-				startIndex = nextOffset
-
-				// update nextOffset to the next record's offset
-				nextOffset = csvReader.InputOffset()
-
-				// update row read count
-				readCount++
-
-				continue
-			}
-
-			rec = record
-		}
-
-		// startIndex & nextOffset will be 0 for the first read, validate headers
-		if startIndex <= 0 && nextOffset <= 0 && s.hasHeader {
-			// Update startIndex to the next record's offset
-			startIndex = nextOffset
-
-			// update nextOffset to the next record's offset
-			nextOffset = csvReader.InputOffset()
-
-			// update row read count
-			readCount++
-
-			continue
-		}
-
-		// Create a BatchRecord for the current record
-		br := domain.BatchRecord[domain.CSVRow]{
-			Start: uint64(startIndex),
-			End:   uint64(csvReader.InputOffset()),
-		}
-
-		// Update startIndex to the next record's offset
-		startIndex = nextOffset
-
-		// update nextOffset to the csvReader's offset
-		nextOffset = csvReader.InputOffset()
-
-		// Update read count
-		readCount++
-
-		// Create a CSVRow from the transformed record
-		rec = utils.CleanAlphaNumericsArr(rec, []rune{'.', '-', '_', '#', '&', '@'})
-		res := s.transFunc(rec)
-
-		row := domain.CSVRow{}
-		for k, v := range res {
-			st, ok := v.(string)
-			if !ok {
-				row[k] = ""
-			}
-			row[k] = st
-		}
-		br.Data = row
-
-		// Update records slice
-		bp.Records = append(bp.Records, &br)
-	}
-
-	bp.NextOffset = offset + uint64(nextOffset)
+	bp.Records = records
+	bp.NextOffset = nextOffset
 	bp.Done = done
 
 	return bp, nil
