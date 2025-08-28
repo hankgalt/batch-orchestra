@@ -86,24 +86,63 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 ) (*domain.BatchProcessingRequest[T, S, D], error) {
 	l := workflow.GetLogger(ctx)
 
+	// Get the workflow name
 	wkflname := workflow.GetInfo(ctx).WorkflowType.Name
 
+	// Get the fetch and write activity aliases based on the source and sink
+	fetchActivityAlias := domain.GetFetchActivityName(req.Source)
+	writeActivityAlias := domain.GetWriteActivityName(req.Sink)
+
 	// setup activity options
-	// TODO update activity options
 	ao := workflow.ActivityOptions{
 		StartToCloseTimeout: time.Minute * 10,
 		RetryPolicy: &temporal.RetryPolicy{
 			MaximumAttempts: 5,
+			NonRetryableErrorTypes: []string{
+				"SomeNonRetryableError",
+			},
 		},
 	}
-	ctx = workflow.WithActivityOptions(ctx, ao)
-	l.Debug(
-		"processBatchWorkflow context set with activity options",
-		"source", req.Source.Name(),
-		"sink", req.Sink.Name(),
-		"start-at", req.StartAt,
-		"workflow", wkflname,
-	)
+
+	fetchAO := ao
+	if policy, ok := req.Policies[fetchActivityAlias]; ok {
+		if policy.MaximumAttempts > 0 {
+			fetchAO.RetryPolicy.MaximumAttempts = policy.MaximumAttempts
+		}
+		if policy.InitialInterval > 0 {
+			fetchAO.RetryPolicy.InitialInterval = policy.InitialInterval
+		}
+		if policy.BackoffCoefficient > 0 {
+			fetchAO.RetryPolicy.BackoffCoefficient = policy.BackoffCoefficient
+		}
+		if policy.MaximumInterval > 0 {
+			fetchAO.RetryPolicy.MaximumInterval = policy.MaximumInterval
+		}
+		if len(policy.NonRetryableErrorTypes) > 0 {
+			fetchAO.RetryPolicy.NonRetryableErrorTypes = policy.NonRetryableErrorTypes
+		}
+	}
+	fetchCtx := workflow.WithActivityOptions(ctx, fetchAO)
+
+	writeAO := ao
+	if policy, ok := req.Policies[writeActivityAlias]; ok {
+		if policy.MaximumAttempts > 0 {
+			writeAO.RetryPolicy.MaximumAttempts = policy.MaximumAttempts
+		}
+		if policy.InitialInterval > 0 {
+			writeAO.RetryPolicy.InitialInterval = policy.InitialInterval
+		}
+		if policy.BackoffCoefficient > 0 {
+			writeAO.RetryPolicy.BackoffCoefficient = policy.BackoffCoefficient
+		}
+		if policy.MaximumInterval > 0 {
+			writeAO.RetryPolicy.MaximumInterval = policy.MaximumInterval
+		}
+		if len(policy.NonRetryableErrorTypes) > 0 {
+			writeAO.RetryPolicy.NonRetryableErrorTypes = policy.NonRetryableErrorTypes
+		}
+	}
+	writeCtx := workflow.WithActivityOptions(ctx, writeAO)
 
 	// setup request state
 	if req.Batches == nil {
@@ -120,9 +159,13 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		req.MaxBatches = WorkflowBatchLimit
 	}
 
-	// Get the fetch and write activity aliases based on the source and sink
-	fetchActivityAlias, writeActivityAlias := getFetchActivityName(req), getWriteActivityName(req)
-
+	l.Debug(
+		"processBatchWorkflow context set with activity options",
+		"source", req.Source.Name(),
+		"sink", req.Sink.Name(),
+		"start-at", req.StartAt,
+		"workflow", wkflname,
+	)
 	// TODO retry case, check for error
 
 	// Initiate a new queue
@@ -137,7 +180,7 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 
 	// Fetch first batch from source
 	var fetched domain.FetchOutput[T]
-	if err := workflow.ExecuteActivity(ctx, fetchActivityAlias, &domain.FetchInput[T, S]{
+	if err := workflow.ExecuteActivity(fetchCtx, fetchActivityAlias, &domain.FetchInput[T, S]{
 		Source:    req.Source,
 		Offset:    req.Offsets[len(req.Offsets)-1],
 		BatchSize: req.BatchSize,
@@ -148,11 +191,11 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 
 	// Update request state with fetched batch
 	req.Offsets = append(req.Offsets, fetched.Batch.NextOffset)
-	req.Batches[getBatchId(fetched.Batch.StartOffset, fetched.Batch.NextOffset, "", "")] = fetched.Batch
+	req.Batches[domain.GetBatchId(fetched.Batch.StartOffset, fetched.Batch.NextOffset, "", "")] = fetched.Batch
 	req.Done = fetched.Batch.Done
 
 	// Write first batch to sink (async) & push resulting future/promise to queue
-	future := workflow.ExecuteActivity(ctx, writeActivityAlias, &domain.WriteInput[T, D]{
+	future := workflow.ExecuteActivity(writeCtx, writeActivityAlias, &domain.WriteInput[T, D]{
 		Sink:  req.Sink,
 		Batch: fetched.Batch,
 	})
@@ -169,7 +212,7 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		if q.Len() < int(req.MaxInProcessBatches) && !req.Done && batchCount < req.MaxBatches {
 			// If # of items in queue are less than concurrent processing limit & there's more data
 			// Fetch the next batch from the source
-			if err := workflow.ExecuteActivity(ctx, fetchActivityAlias, &domain.FetchInput[T, S]{
+			if err := workflow.ExecuteActivity(fetchCtx, fetchActivityAlias, &domain.FetchInput[T, S]{
 				Source:    req.Source,
 				Offset:    req.Offsets[len(req.Offsets)-1],
 				BatchSize: req.BatchSize,
@@ -180,11 +223,11 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 
 			// Update request state with fetched batch
 			req.Offsets = append(req.Offsets, fetched.Batch.NextOffset)
-			req.Batches[getBatchId(fetched.Batch.StartOffset, fetched.Batch.NextOffset, "", "")] = fetched.Batch
+			req.Batches[domain.GetBatchId(fetched.Batch.StartOffset, fetched.Batch.NextOffset, "", "")] = fetched.Batch
 			req.Done = fetched.Batch.Done
 
 			// Write next batch to sink (async) & push resulting future/promise to queue
-			future := workflow.ExecuteActivity(ctx, writeActivityAlias, &domain.WriteInput[T, D]{
+			future := workflow.ExecuteActivity(writeCtx, writeActivityAlias, &domain.WriteInput[T, D]{
 				Sink:  req.Sink,
 				Batch: fetched.Batch,
 			})
@@ -196,12 +239,12 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 				return req, temporal.NewApplicationErrorWithCause(FAILED_REMOVE_FUTURE, FAILED_REMOVE_FUTURE, ErrFailedRemoveFuture)
 			}
 			var wOut domain.WriteOutput[T]
-			if err := future.Get(ctx, &wOut); err != nil {
+			if err := future.Get(writeCtx, &wOut); err != nil {
 				return req, err
 			}
 
 			// Update request state
-			batchId := getBatchId(wOut.Batch.StartOffset, wOut.Batch.NextOffset, "", "")
+			batchId := domain.GetBatchId(wOut.Batch.StartOffset, wOut.Batch.NextOffset, "", "")
 			if _, ok := req.Batches[batchId]; !ok {
 				req.Batches[batchId] = wOut.Batch
 			} else {
@@ -213,7 +256,7 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	if !req.Done && batchCount >= req.MaxBatches {
 		// continue as new
 		startAt := req.Offsets[len(req.Offsets)-1]
-		lastBatch := req.Batches[getBatchId(req.Offsets[len(req.Offsets)-2], req.Offsets[len(req.Offsets)-1], "", "")]
+		lastBatch := req.Batches[domain.GetBatchId(req.Offsets[len(req.Offsets)-2], req.Offsets[len(req.Offsets)-1], "", "")]
 		l.Debug(
 			"processBatchWorkflow continuing as new",
 			"source", req.Source.Name(),
@@ -237,28 +280,4 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		"batch-count", batchCount,
 	)
 	return req, nil
-}
-
-func getFetchActivityName[T any, S domain.SourceConfig[T], D domain.SinkConfig[T]](req *domain.BatchProcessingRequest[T, S, D]) string {
-	return "fetch-next-" + req.Source.Name() + "-batch-alias"
-}
-
-func getWriteActivityName[T any, S domain.SourceConfig[T], D domain.SinkConfig[T]](req *domain.BatchProcessingRequest[T, S, D]) string {
-	return "write-next-" + req.Sink.Name() + "-batch-alias"
-}
-
-func getBatchId(start, end uint64, prefix, suffix string) string {
-	if prefix == "" && suffix == "" {
-		return fmt.Sprintf("batch-%d-%d", start, end)
-	}
-
-	if prefix != "" && suffix != "" {
-		return fmt.Sprintf("%s-%d-%d-%s", prefix, start, end, suffix)
-	}
-
-	if prefix != "" {
-		return fmt.Sprintf("%s-%d-%d", prefix, start, end)
-	}
-
-	return fmt.Sprintf("%d-%d-%s", start, end, suffix)
 }

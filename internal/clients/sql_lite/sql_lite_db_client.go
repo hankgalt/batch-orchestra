@@ -3,10 +3,22 @@ package sqllite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"log"
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/mattn/go-sqlite3"
+)
+
+const (
+	ERR_SQLITE_DB_CONNECTION    = "sql-lite: error connecting to database"
+	ERR_SQLITE_DB_DISCONNECTION = "sql-lite: error disconnecting from database"
+)
+
+var (
+	ErrSqlLiteDBConn    = errors.New(ERR_SQLITE_DB_CONNECTION)
+	ErrSqlLiteDBDisconn = errors.New(ERR_SQLITE_DB_DISCONNECTION)
 )
 
 type SQLLiteDBClient struct {
@@ -16,7 +28,8 @@ type SQLLiteDBClient struct {
 func NewSQLLiteDBClient(dbFile string) (*SQLLiteDBClient, error) {
 	db, err := sqlx.Connect("sqlite3", dbFile)
 	if err != nil {
-		return nil, err
+		log.Println("sql-lite: error connecting to database:", err)
+		return nil, ErrSqlLiteDBConn
 	}
 
 	return &SQLLiteDBClient{
@@ -30,17 +43,21 @@ func (db *SQLLiteDBClient) ExecuteSchema(schema string) sql.Result {
 }
 
 func (db *SQLLiteDBClient) Close(ctx context.Context) error {
-	return db.store.Close()
+	if err := db.store.Close(); err != nil {
+		log.Println("sql-lite: error closing database:", err)
+		return ErrSqlLiteDBDisconn
+	}
+	return nil
 }
 
 func (db *SQLLiteDBClient) InsertRecord(ctx context.Context, table string, record map[string]any) (sql.Result, error) {
 	if table != "agent" {
-		return nil, fmt.Errorf("unsupported table: %s", table)
+		return nil, fmt.Errorf("sql-lite: unsupported table: %s", table)
 	}
 
 	row := MapAgentRecord(record)
 	if row == nil {
-		return nil, fmt.Errorf("invalid record: %v", record)
+		return nil, fmt.Errorf("sql-lite: invalid record: %v", record)
 	}
 
 	return db.insertRecord("agent", row)
@@ -48,7 +65,7 @@ func (db *SQLLiteDBClient) InsertRecord(ctx context.Context, table string, recor
 
 func (db *SQLLiteDBClient) FetchRecords(ctx context.Context, table string, offset, limit int) ([]Agent, error) {
 	if table != "agent" {
-		return nil, fmt.Errorf("unsupported table: %s", table)
+		return nil, fmt.Errorf("sql-lite: unsupported table: %s", table)
 	}
 
 	agents := []Agent{}

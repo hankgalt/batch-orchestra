@@ -12,6 +12,16 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/readpref"
 )
 
+const (
+	ErrMsgMongoMissingDBName            = "missing database name"
+	ErrMsgMongoCollectionNameOrDocEmpty = "collection name and document cannot be empty"
+)
+
+var (
+	ErrMongoMissingDBName            = errors.New(ErrMsgMongoMissingDBName)
+	ErrMongoCollectionNameOrDocEmpty = errors.New(ErrMsgMongoCollectionNameOrDocEmpty)
+)
+
 type MongoStore struct {
 	client *mongo.Client
 	store  *mongo.Database
@@ -34,7 +44,7 @@ func NewMongoStore(ctx context.Context, cfg MongoConfig) (*MongoStore, error) {
 	}
 
 	if opts.DBName == "" {
-		return nil, fmt.Errorf("missing database name")
+		return nil, ErrMongoMissingDBName
 	}
 
 	dbConnStr, err := builder.Build()
@@ -74,7 +84,7 @@ func (ms *MongoStore) AddCollectionDoc(
 	doc map[string]any,
 ) (string, error) {
 	if collectionName == "" || doc == nil {
-		return "", fmt.Errorf("collection name and document cannot be empty")
+		return "", ErrMongoCollectionNameOrDocEmpty
 	}
 
 	now := time.Now().UTC()

@@ -13,6 +13,21 @@ import (
 	"github.com/hankgalt/batch-orchestra/pkg/utils"
 )
 
+// Error constants and variables
+const (
+	ErrMsgLocalCSVTransformerNil     = "transformer function is not set for local CSV source with headers"
+	ErrMsgLocalCSVSizeMustBePositive = "size must be greater than 0"
+	ErrMsgLocalCSVPathRequired       = "local csv: path is required"
+	ErrMsgLocalCSVFileNotFound       = "local csv: error opening file"
+)
+
+var (
+	ErrLocalCSVTransformerNil     = errors.New(ErrMsgLocalCSVTransformerNil)
+	ErrLocalCSVSizeMustBePositive = errors.New(ErrMsgLocalCSVSizeMustBePositive)
+	ErrLocalCSVPathRequired       = errors.New(ErrMsgLocalCSVPathRequired)
+	ErrLocalCSVFileNotFound       = errors.New(ErrMsgLocalCSVFileNotFound)
+)
+
 const (
 	LocalCSVSource = "local-csv-source"
 )
@@ -50,26 +65,27 @@ func (s *localCSVSource) Next(
 
 	// If size is 0 or negative, return an empty batch.
 	if size <= 0 {
-		return bp, nil
+		return bp, ErrLocalCSVSizeMustBePositive
 	}
 
 	// Open the local CSV file.
 	f, err := os.Open(s.path)
 	if err != nil {
-		return bp, fmt.Errorf("open file: %w", err)
+		log.Println(ErrMsgLocalCSVFileNotFound, err)
+		return bp, ErrLocalCSVFileNotFound
 	}
 	defer f.Close()
 
 	// If headers are enabled but transformer function is not set.
 	if s.hasHeader && s.transFunc == nil {
-		return bp, fmt.Errorf("transformer function is not set for local CSV source with headers")
+		return bp, ErrLocalCSVTransformerNil
 	}
 
 	// Read data bytes from the file at the specified offset
 	data := make([]byte, size)
 	numBytesRead, err := f.ReadAt(data, int64(offset))
 	if err != nil && err != io.EOF {
-		return bp, fmt.Errorf("error reading file %s at offset %d: %w", s.path, offset, err)
+		return bp, fmt.Errorf("local csv: error reading file %s at offset %d: %w", s.path, offset, err)
 	}
 
 	// If read data is less than requested, it means we reached EOF, set Done
@@ -109,19 +125,20 @@ func (s *localCSVSource) NextStream(
 ) (<-chan *domain.BatchRecord[domain.CSVRow], error) {
 	// If size is 0 or negative, return an empty batch.
 	if size <= 0 {
-		return nil, fmt.Errorf("size must be greater than 0")
+		return nil, ErrLocalCSVSizeMustBePositive
 	}
 
 	// Open the local CSV file.
 	f, err := os.Open(s.path)
 	if err != nil {
-		return nil, fmt.Errorf("open file: %w", err)
+		log.Println(ErrMsgLocalCSVFileNotFound, err)
+		return nil, ErrLocalCSVFileNotFound
 	}
 	defer f.Close()
 
 	// If headers are enabled but transformer function is not set.
 	if s.hasHeader && s.transFunc == nil {
-		return nil, fmt.Errorf("transformer function is not set for local CSV source with headers")
+		return nil, ErrLocalCSVTransformerNil
 	}
 
 	// Set start index to the specified offset.
@@ -131,7 +148,7 @@ func (s *localCSVSource) NextStream(
 	data := make([]byte, size)
 	numBytesRead, err := f.ReadAt(data, startIndex)
 	if err != nil && err != io.EOF {
-		return nil, fmt.Errorf("error reading file %s at offset %d: %w", s.path, startIndex, err)
+		return nil, fmt.Errorf("local csv: error reading file %s at offset %d: %w", s.path, startIndex, err)
 	}
 
 	// If read data is less than requested, it means we reached EOF, set Done
@@ -188,7 +205,7 @@ func (c LocalCSVConfig) BuildSource(
 	ctx context.Context,
 ) (domain.Source[domain.CSVRow], error) {
 	if c.Path == "" {
-		return nil, errors.New("local csv: path is required")
+		return nil, ErrLocalCSVPathRequired
 	}
 
 	delim := c.Delimiter
@@ -206,7 +223,8 @@ func (c LocalCSVConfig) BuildSource(
 	if c.HasHeader {
 		f, err := os.Open(c.Path)
 		if err != nil {
-			return nil, fmt.Errorf("local csv: open: %w", err)
+			log.Println(ErrMsgLocalCSVFileNotFound, err)
+			return nil, ErrLocalCSVFileNotFound
 		}
 		defer f.Close()
 

@@ -21,6 +21,7 @@ import (
 	"github.com/comfforts/logger"
 
 	bo "github.com/hankgalt/batch-orchestra"
+	"github.com/hankgalt/batch-orchestra/internal/clients/mongodb"
 	sqllite "github.com/hankgalt/batch-orchestra/internal/clients/sql_lite"
 	"github.com/hankgalt/batch-orchestra/internal/sinks"
 	"github.com/hankgalt/batch-orchestra/internal/sources"
@@ -542,6 +543,38 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath_Server(t *testing.T) {
 		StartAt:             0,
 		Source:              sourceCfg,
 		Sink:                sinkCfg,
+		Policies: map[string]domain.RetryPolicySpec{
+			domain.GetFetchActivityName(sourceCfg): {
+				MaximumAttempts:    3,
+				InitialInterval:    100 * time.Millisecond,
+				BackoffCoefficient: 2.0,
+				MaximumInterval:    5 * time.Second,
+				NonRetryableErrorTypes: []string{
+					sources.ErrMsgLocalCSVPathRequired,
+					sources.ErrMsgLocalCSVSizeMustBePositive,
+					sources.ErrMsgLocalCSVFileNotFound,
+					sources.ErrMsgLocalCSVTransformerNil,
+				},
+			},
+			domain.GetWriteActivityName(sinkCfg): {
+				MaximumAttempts:    5,
+				InitialInterval:    200 * time.Millisecond,
+				BackoffCoefficient: 1.5,
+				MaximumInterval:    10 * time.Second,
+				NonRetryableErrorTypes: []string{
+					sinks.ErrMsgMongoSinkNil,
+					sinks.ErrMsgMongoSinkNilClient,
+					sinks.ErrMsgMongoSinkEmptyCollection,
+					sinks.ErrMsgMongoSinkDBProtocolRequired,
+					sinks.ErrMsgMongoSinkDBHostRequired,
+					sinks.ErrMsgMongoSinkDBNameRequired,
+					sinks.ErrMsgMongoSinkDBUserRequired,
+					sinks.ErrMsgMongoSinkDBPwdRequired,
+					mongodb.ErrMsgMongoMissingDBName,
+					mongodb.ErrMsgMongoCollectionNameOrDocEmpty,
+				},
+			},
+		},
 	}
 
 	// Create workflow execution context
@@ -673,6 +706,33 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 		StartAt:             0,
 		Source:              sourceCfg,
 		Sink:                sinkCfg,
+		Policies: map[string]domain.RetryPolicySpec{
+			domain.GetFetchActivityName(sourceCfg): {
+				MaximumAttempts:    3,
+				InitialInterval:    100 * time.Millisecond,
+				BackoffCoefficient: 2.0,
+				MaximumInterval:    5 * time.Second,
+				NonRetryableErrorTypes: []string{
+					sources.ErrMsgLocalCSVPathRequired,
+					sources.ErrMsgLocalCSVSizeMustBePositive,
+					sources.ErrMsgLocalCSVFileNotFound,
+					sources.ErrMsgLocalCSVTransformerNil,
+				},
+			},
+			domain.GetWriteActivityName(sinkCfg): {
+				MaximumAttempts:    5,
+				InitialInterval:    200 * time.Millisecond,
+				BackoffCoefficient: 1.5,
+				MaximumInterval:    10 * time.Second,
+				NonRetryableErrorTypes: []string{
+					sinks.ErrMsgSQLLiteSinkNil,
+					sinks.ErrMsgSQLLiteSinkNilClient,
+					sinks.ErrMsgSQLLiteSinkEmptyTable,
+					sinks.ErrMsgSQLLiteSinkDBFileRequired,
+					sqllite.ERR_SQLITE_DB_CONNECTION,
+				},
+			},
+		},
 	}
 
 	env.SetOnActivityStartedListener(

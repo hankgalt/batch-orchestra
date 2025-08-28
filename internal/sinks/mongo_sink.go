@@ -10,6 +10,29 @@ import (
 	"github.com/hankgalt/batch-orchestra/pkg/domain"
 )
 
+// Error constants and variables
+const (
+	ErrMsgMongoSinkNil                = "mongo sink is nil"
+	ErrMsgMongoSinkNilClient          = "mongo sink: nil client"
+	ErrMsgMongoSinkEmptyCollection    = "mongo sink: empty collection"
+	ErrMsgMongoSinkDBProtocolRequired = "mongo sink: DB protocol is required"
+	ErrMsgMongoSinkDBHostRequired     = "mongo sink: DB host is required"
+	ErrMsgMongoSinkDBNameRequired     = "mongo sink: DB name is required"
+	ErrMsgMongoSinkDBUserRequired     = "mongo sink: DB user is required"
+	ErrMsgMongoSinkDBPwdRequired      = "mongo sink: DB password is required"
+)
+
+var (
+	ErrMongoSinkNil                = errors.New(ErrMsgMongoSinkNil)
+	ErrMongoSinkNilClient          = errors.New(ErrMsgMongoSinkNilClient)
+	ErrMongoSinkEmptyCollection    = errors.New(ErrMsgMongoSinkEmptyCollection)
+	ErrMongoSinkDBProtocolRequired = errors.New(ErrMsgMongoSinkDBProtocolRequired)
+	ErrMongoSinkDBHostRequired     = errors.New(ErrMsgMongoSinkDBHostRequired)
+	ErrMongoSinkDBNameRequired     = errors.New(ErrMsgMongoSinkDBNameRequired)
+	ErrMongoSinkDBUserRequired     = errors.New(ErrMsgMongoSinkDBUserRequired)
+	ErrMongoSinkDBPwdRequired      = errors.New(ErrMsgMongoSinkDBPwdRequired)
+)
+
 const MongoSink = "mongo-sink"
 
 // MongoDocWriter is the tiny capability we need.
@@ -51,7 +74,9 @@ func (s *mongoSink[T]) WriteStream(ctx context.Context, start uint64, data []T) 
 
 			res, err := s.client.AddCollectionDoc(ctx, s.collection, doc)
 			if err != nil {
-				resStream <- domain.BatchResult{Error: fmt.Sprintf("record %d insert: %s", i, err.Error())}
+				resStream <- domain.BatchResult{
+					Error: fmt.Sprintf("record %d insert: %s", i, err.Error()),
+				}
 				continue
 			}
 			resStream <- domain.BatchResult{
@@ -66,13 +91,13 @@ func (s *mongoSink[T]) WriteStream(ctx context.Context, start uint64, data []T) 
 // Write writes the batch of records to MongoDB.
 func (s *mongoSink[T]) Write(ctx context.Context, b *domain.BatchProcess[T]) (*domain.BatchProcess[T], error) {
 	if s == nil {
-		return b, errors.New("mongo sink is nil")
+		return b, ErrMongoSinkNil
 	}
 	if s.client == nil {
-		return b, errors.New("mongo sink: nil client")
+		return b, ErrMongoSinkNilClient
 	}
 	if s.collection == "" {
-		return b, errors.New("mongo sink: empty collection")
+		return b, ErrMongoSinkEmptyCollection
 	}
 
 	if len(b.Records) == 0 {
@@ -129,22 +154,22 @@ func (c MongoSinkConfig[T]) Name() string { return MongoSink }
 // BuildSink builds a MongoDB sink from the config.
 func (c MongoSinkConfig[T]) BuildSink(ctx context.Context) (domain.Sink[T], error) {
 	if c.Protocol == "" {
-		return nil, errors.New("mongo sink: DB protocol is required")
+		return nil, ErrMongoSinkDBProtocolRequired
 	}
 	if c.Host == "" {
-		return nil, errors.New("mongo sink: DB host is required")
+		return nil, ErrMongoSinkDBHostRequired
 	}
 	if c.DBName == "" {
-		return nil, errors.New("mongo sink: DB name is required")
+		return nil, ErrMongoSinkDBNameRequired
 	}
 	if c.User == "" {
-		return nil, errors.New("mongo sink: DB user is required")
+		return nil, ErrMongoSinkDBUserRequired
 	}
 	if c.Pwd == "" {
-		return nil, errors.New("mongo sink: DB password is required")
+		return nil, ErrMongoSinkDBPwdRequired
 	}
 	if c.Collection == "" {
-		return nil, errors.New("mongo sink: collection name is required")
+		return nil, ErrMongoSinkEmptyCollection
 	}
 
 	mCfg := mongodb.MongoConfig{

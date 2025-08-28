@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"time"
 )
 
 // Domain "record" type that moves through the pipeline.
@@ -102,6 +103,7 @@ type BatchProcessingRequest[T any, S SourceConfig[T], D SinkConfig[T]] struct {
 	Done                bool                        // whether the job is done
 	Offsets             []uint64                    // list of offsets for each batch
 	Batches             map[string]*BatchProcess[T] // map of batch by ID
+	Policies            map[string]RetryPolicySpec  // map of retry policies for batch activities by activity alias
 }
 
 type Rule struct {
@@ -118,4 +120,12 @@ type CloudFileConfig struct {
 	Name   string
 	Path   string
 	Bucket string
+}
+
+type RetryPolicySpec struct {
+	InitialInterval        time.Duration
+	BackoffCoefficient     float64
+	MaximumInterval        time.Duration
+	MaximumAttempts        int32
+	NonRetryableErrorTypes []string
 }
