@@ -6,23 +6,27 @@ import (
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 
+	"github.com/hankgalt/batch-orchestra/internal/sinks"
+	"github.com/hankgalt/batch-orchestra/internal/sources"
 	"github.com/hankgalt/batch-orchestra/pkg/domain"
-	"github.com/hankgalt/batch-orchestra/pkg/sinks"
-	"github.com/hankgalt/batch-orchestra/pkg/sources"
 )
 
 type ActivityAlias string
 
+// Source/Sink tied activity aliases for registration and lookup. These aliases
+// are needed to identify the activities for generic implementation.
 const (
 	FetchNextLocalCSVSourceBatchAlias string = "fetch-next-" + sources.LocalCSVSource + "-batch-alias"
 	FetchNextCloudCSVSourceBatchAlias string = "fetch-next-" + sources.CloudCSVSource + "-batch-alias"
 	WriteNextNoopSinkBatchAlias       string = "write-next-" + sinks.NoopSink + "-batch-alias"
 	WriteNextMongoSinkBatchAlias      string = "write-next-" + sinks.MongoSink + "-batch-alias"
+	WriteNextSQLLiteSinkBatchAlias    string = "write-next-" + sinks.SQLLiteSink + "-batch-alias"
 )
 
 // FetchNextActivity fetches the next batch of data from the source.
 // It builds the source from the provided configuration, fetches the next batch,
 // and records a heartbeat for the activity.
+// Returns the fetched batch with read details or an error.
 func FetchNextActivity[T any, S domain.SourceConfig[T]](
 	ctx context.Context,
 	in *domain.FetchInput[T, S],
@@ -60,6 +64,7 @@ func FetchNextActivity[T any, S domain.SourceConfig[T]](
 // WriteActivity writes a batch of data to the sink.
 // It builds the sink from the provided configuration, writes the batch,
 // and records a heartbeat for the activity.
+// Returns the written batch with result details or an error.
 func WriteActivity[T any, D domain.SinkConfig[T]](
 	ctx context.Context,
 	in *domain.WriteInput[T, D],

@@ -6,13 +6,11 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/hankgalt/batch-orchestra/pkg/clients/mongodb"
+	"github.com/hankgalt/batch-orchestra/internal/clients/mongodb"
 	"github.com/hankgalt/batch-orchestra/pkg/domain"
 )
 
-const (
-	MongoSink = "mongo-sink"
-)
+const MongoSink = "mongo-sink"
 
 // MongoDocWriter is the tiny capability we need.
 type MongoDocWriter interface {

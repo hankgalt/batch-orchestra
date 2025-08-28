@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/hankgalt/batch-orchestra/pkg/clients/mongodb"
+	"github.com/hankgalt/batch-orchestra/internal/clients/mongodb"
 	"github.com/hankgalt/batch-orchestra/pkg/domain"
 )
 

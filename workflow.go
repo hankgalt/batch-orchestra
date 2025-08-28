@@ -13,8 +13,9 @@ import (
 )
 
 const (
-	ProcessLocalCSVMongoWorkflowAlias string = "process-local-csv-mongo-workflow-alias"
-	ProcessCloudCSVMongoWorkflowAlias string = "process-cloud-csv-mongo-workflow-alias"
+	ProcessLocalCSVMongoWorkflowAlias   string = "process-local-csv-mongo-workflow-alias"
+	ProcessCloudCSVMongoWorkflowAlias   string = "process-cloud-csv-mongo-workflow-alias"
+	ProcessLocalCSVSQLLiteWorkflowAlias string = "process-local-csv-sqlite-workflow-alias"
 )
 
 const (

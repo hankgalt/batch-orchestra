@@ -3,6 +3,7 @@ package batch_orchestra_test
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -20,15 +21,17 @@ import (
 	"github.com/comfforts/logger"
 
 	bo "github.com/hankgalt/batch-orchestra"
+	sqllite "github.com/hankgalt/batch-orchestra/internal/clients/sql_lite"
+	"github.com/hankgalt/batch-orchestra/internal/sinks"
+	"github.com/hankgalt/batch-orchestra/internal/sources"
 	"github.com/hankgalt/batch-orchestra/pkg/domain"
-	"github.com/hankgalt/batch-orchestra/pkg/sinks"
-	"github.com/hankgalt/batch-orchestra/pkg/sources"
 	"github.com/hankgalt/batch-orchestra/pkg/utils"
 )
 
 type LocalCSVMongoBatchRequest domain.BatchProcessingRequest[domain.CSVRow, sources.LocalCSVConfig, sinks.MongoSinkConfig[domain.CSVRow]]
 type LocalCSVNoopBatchRequest domain.BatchProcessingRequest[domain.CSVRow, sources.LocalCSVConfig, sinks.NoopSinkConfig[domain.CSVRow]]
 type CloudCSVMongoBatchRequest domain.BatchProcessingRequest[domain.CSVRow, sources.CloudCSVConfig, sinks.MongoSinkConfig[domain.CSVRow]]
+type LocalCSVSQLLiteBatchRequest domain.BatchProcessingRequest[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow]]
 
 type ProcessBatchWorkflowTestSuite struct {
 	suite.Suite
@@ -57,6 +60,7 @@ func (s *ProcessBatchWorkflowTestSuite) TearDownTest() {
 
 }
 
+// Setup mongo cluster & setup mongo & cloud test environment, before running this test.
 func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_Mongo_HappyPath() {
 	l := s.GetLogger()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
@@ -189,6 +193,8 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_Mongo
 	})
 }
 
+// Setup mongo cluster, setup local csv file,
+// & setup mongo test environment, before running this test.
 func Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
@@ -321,6 +327,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath(t *testing.T) {
 
 }
 
+// Setup mongo cluster, setup local csv file & setup mongo test env vars, before running this test.
 func Test_ProcessBatchWorkflow_LocalCSV_Mongo_ContinueAsNewError(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
@@ -442,7 +449,8 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_ContinueAsNewError(t *testing.T) {
 }
 
 // Integration test for ProcessBatchWorkflow on a dev Temporal server.
-// Start temporal dev server before running this test.
+// Start temporal dev server, setup mongo cluster, setup local csv file,
+// & setup mongo, temporal test environment, before running this test.
 func Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath_Server(t *testing.T) {
 	// get test logger
 	l := logger.GetSlogLogger()
@@ -528,7 +536,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath_Server(t *testing.T) {
 
 	req := &LocalCSVMongoBatchRequest{
 		JobID:               "process-batch-workflow-local-csv-mongo-server-happy",
-		BatchSize:           400,
+		BatchSize:           200,
 		MaxInProcessBatches: 2,
 		MaxBatches:          6,
 		StartAt:             0,
@@ -564,6 +572,173 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath_Server(t *testing.T) {
 		"offsets", out.Offsets,
 		"num-batches-processed", len(out.Offsets),
 	)
+}
+
+func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+
+	l := logger.GetSlogLogger()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	ctx = logger.WithLogger(ctx, l)
+
+	env.SetWorkerOptions(worker.Options{
+		BackgroundActivityContext: ctx,
+		DeadlockDetectionTimeout:  24 * time.Hour, // set a long timeout to avoid deadlock detection during tests
+	})
+
+	env.SetTestTimeout(24 * time.Hour)
+
+	// Register the workflow
+	env.RegisterWorkflowWithOptions(
+		bo.ProcessBatchWorkflow[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow]],
+		workflow.RegisterOptions{
+			Name: bo.ProcessLocalCSVSQLLiteWorkflowAlias,
+		},
+	)
+
+	// Register activities.
+	env.RegisterActivityWithOptions(
+		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
+		activity.RegisterOptions{
+			Name: bo.FetchNextLocalCSVSourceBatchAlias,
+		},
+	)
+	env.RegisterActivityWithOptions(
+		bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
+		activity.RegisterOptions{
+			Name: bo.WriteNextSQLLiteSinkBatchAlias,
+		},
+	)
+
+	// Build source & sink configurations
+	// Source - local CSV
+	// Build a small CSV
+	path := writeTempCSV(t,
+		[]string{"entity_id", "entity_name", "name", "address", "agent_type"},
+		[][]string{
+			{"A7SD456", "alpha", "John Doe", "Address 1", "sales"},
+			{"A7SD457", "beta", "Jane Smith", "Address 2", "support"},
+			{"A7SD458", "gamma", "Jim Brown", "Address 3", "marketing"},
+			{"A7SD459", "delta", "Jack White", "Address 4", "sales"},
+			{"A7SD460", "epsilon", "Jill Black", "Address 5", "support"},
+			{"A7SD461", "zeta", "Jake Green", "Address 6", "marketing"},
+			{"A7SD462", "eta", "Jasmine Blue", "Address 7", "support"},
+			{"A7SD463", "theta", "Jordan Black", "Address 8", "sales"},
+			{"A7SD464", "iota", "Jessica Pink", "Address 9", "support"},
+			{"A7SD465", "kappa", "Jeremy Gray", "Address 10", "marketing"},
+			{"A7SD466", "lambda", "Jasmine White", "Address 11", "support"},
+			{"A7SD467", "mu", "Jordan White", "Address 12", "sales"},
+			{"A7SD468", "nu", "Jasmine Green", "Address 13", "support"},
+		},
+	)
+	defer func() {
+		require.NoError(t, os.Remove(path), "cleanup temp CSV file")
+	}()
+	sourceCfg := sources.LocalCSVConfig{
+		Path:         path,
+		HasHeader:    true,
+		MappingRules: domain.BuildBusinessModelTransformRules(),
+	}
+
+	// Sink - MongoDB
+	dbFile := "data/__deleteme.db"
+	dbClient, err := sqllite.NewSQLLiteDBClient(dbFile)
+	require.NoError(t, err)
+
+	defer func(cl *sqllite.SQLLiteDBClient, fpath string) {
+		ags, err := cl.FetchRecords(context.Background(), "agent", 0, 15)
+		require.NoError(t, err)
+		require.Equal(t, len(ags), 13)
+
+		require.NoError(t, cl.Close(ctx), "close db client")
+		require.NoError(t, os.Remove(fpath), "cleanup temp db file")
+	}(dbClient, dbFile)
+
+	res := dbClient.ExecuteSchema(sqllite.AgentSchema)
+	n, err := res.LastInsertId()
+	require.NoError(t, err)
+	require.Equal(t, int64(0), n)
+
+	sinkCfg := sinks.SQLLiteSinkConfig[domain.CSVRow]{
+		DBFile: dbFile,
+		Table:  "agent",
+	}
+
+	req := &LocalCSVSQLLiteBatchRequest{
+		JobID:               "job-happy",
+		BatchSize:           400,
+		MaxInProcessBatches: 2,
+		StartAt:             0,
+		Source:              sourceCfg,
+		Sink:                sinkCfg,
+	}
+
+	env.SetOnActivityStartedListener(
+		func(
+			activityInfo *activity.Info,
+			ctx context.Context,
+			args converter.EncodedValues,
+		) {
+			activityType := activityInfo.ActivityType.Name
+			if strings.HasPrefix(activityType, "internalSession") {
+				return
+			}
+
+			l.Debug(
+				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath - Activity started",
+				"activity-type", activityType,
+			)
+
+		})
+
+	defer func() {
+		if err := recover(); err != nil {
+			l.Error(
+				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath - panicked",
+				"workflow", bo.ProcessLocalCSVSQLLiteWorkflowAlias,
+				"error", err,
+			)
+		}
+
+		err := env.GetWorkflowError()
+		if err != nil {
+			l.Error(
+				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath - error",
+				"error", err.Error(),
+			)
+		} else {
+			var result LocalCSVSQLLiteBatchRequest
+			err := env.GetWorkflowResult(&result)
+			require.NoError(t, err)
+			l.Debug(
+				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath - success",
+				"result-offsets", result.Offsets,
+				"num-batches-processed", len(result.Batches),
+			)
+			require.EqualValues(t, 3, len(result.Offsets))
+			require.EqualValues(t, 2, len(result.Batches))
+			recordCount := 0
+			errorCount := 0
+			for _, batch := range result.Batches {
+				recordCount += len(batch.Records)
+				for _, rec := range batch.Records {
+					if rec.BatchResult.Error != "" {
+						errorCount++
+					}
+				}
+			}
+			require.EqualValues(t, 13, recordCount)
+			require.EqualValues(t, 0, errorCount)
+		}
+
+	}()
+
+	env.ExecuteWorkflow(bo.ProcessLocalCSVSQLLiteWorkflowAlias, req)
+
+	require.True(t, env.IsWorkflowCompleted())
+
 }
 
 func extractContinueAsNewInput[T any](err error, dc converter.DataConverter, out *T) (ok bool, _ error) {

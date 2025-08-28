@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Mongo environment variables
-ENV_FILE="./pkg/clients/mongodb/mongo.env"
+ENV_FILE="./internal/clients/mongodb/mongo.env"
 
 # Check if the environment file exists and source it
 if [ -f "${ENV_FILE}" ]; then
@@ -17,4 +17,4 @@ echo " - Base dir: ${BASEDIR}"
 cd ${BASEDIR}/../
 
 # Start MongoDB using docker-compose
-docker-compose -f pkg/clients/mongodb/docker-compose-mongo.yml up -d
+docker-compose -f internal/clients/mongodb/docker-compose-mongo.yml up -d

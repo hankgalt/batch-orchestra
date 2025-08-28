@@ -26,5 +26,5 @@ start-mongo: network mongo
 # stop mongo cluster
 stop-mongo:
 	@echo "Stopping MongoDB cluster..."
-	@set -a; . pkg/clients/mongodb/mongo.env; set +a; docker-compose -f pkg/clients/mongodb/docker-compose-mongo.yml down -v
+	@set -a; . internal/clients/mongodb/mongo.env; set +a; docker-compose -f internal/clients/mongodb/docker-compose-mongo.yml down -v
 
