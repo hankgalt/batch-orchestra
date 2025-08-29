@@ -20,10 +20,12 @@ const (
 
 const (
 	FAILED_REMOVE_FUTURE = "failed to remove future from queue"
+	ERR_QUERY_HANDLER    = "error setting query handler"
 )
 
 var (
 	ErrFailedRemoveFuture = errors.New(FAILED_REMOVE_FUTURE)
+	ErrQueryHandler       = errors.New(ERR_QUERY_HANDLER)
 )
 
 const WorkflowBatchLimit = uint(100)
@@ -88,6 +90,21 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 
 	// Get the workflow name
 	wkflname := workflow.GetInfo(ctx).WorkflowType.Name
+
+	// setup query handler for query type "state"
+	if err := workflow.SetQueryHandler(ctx, "state", func(input []byte) (*domain.BatchProcessingRequest[T, S, D], error) {
+		return req, nil
+	}); err != nil {
+		l.Error(
+			"ProcessBatchWorkflow - SetQueryHandler failed",
+			"source", req.Source.Name(),
+			"sink", req.Sink.Name(),
+			"start-at", req.StartAt,
+			"workflow", wkflname,
+			"error", err.Error(),
+		)
+		return req, temporal.NewApplicationErrorWithCause(ERR_QUERY_HANDLER, ERR_QUERY_HANDLER, ErrQueryHandler)
+	}
 
 	// Get the fetch and write activity aliases based on the source and sink
 	fetchActivityAlias := domain.GetFetchActivityName(req.Source)
