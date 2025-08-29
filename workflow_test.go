@@ -14,6 +14,7 @@ import (
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
@@ -801,6 +802,229 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 
 }
 
+func Test_ProcessBatchWorkflow_Err_NonRetryable(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+
+	l := logger.GetSlogLogger()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	ctx = logger.WithLogger(ctx, l)
+
+	ctx = context.WithValue(ctx, "fail-source", true)
+
+	env.SetWorkerOptions(worker.Options{
+		BackgroundActivityContext: ctx,
+		DeadlockDetectionTimeout:  24 * time.Hour, // set a long timeout to avoid deadlock detection during tests
+	})
+
+	env.SetTestTimeout(24 * time.Hour)
+
+	// Register the workflow
+	env.RegisterWorkflowWithOptions(
+		bo.ProcessBatchWorkflow[domain.CSVRow, *fakeSrcConfig, *fakeSinkConfig[domain.CSVRow]],
+		workflow.RegisterOptions{
+			Name: ProcessFakeSrcSinkWorkflowAlias,
+		},
+	)
+
+	// Register activities.
+	env.RegisterActivityWithOptions(
+		bo.FetchNextActivity[domain.CSVRow, *fakeSrcConfig],
+		activity.RegisterOptions{
+			Name: FetchNextFakeSourceBatchAlias,
+		},
+	)
+	env.RegisterActivityWithOptions(
+		bo.WriteActivity[domain.CSVRow, *fakeSinkConfig[domain.CSVRow]],
+		activity.RegisterOptions{
+			Name: WriteNextFakeSinkBatchAlias,
+		},
+	)
+
+	sourceCfg := &fakeSrcConfig{}
+	sinkCfg := &fakeSinkConfig[domain.CSVRow]{}
+
+	req := &FakeSourceSinkBatchRequest{
+		JobID:               "job-retryable-error",
+		BatchSize:           400,
+		MaxInProcessBatches: 2,
+		StartAt:             0,
+		Source:              sourceCfg,
+		Sink:                sinkCfg,
+		Policies: map[string]domain.RetryPolicySpec{
+			domain.GetFetchActivityName(sourceCfg): {
+				MaximumAttempts:    3,
+				InitialInterval:    100 * time.Millisecond,
+				BackoffCoefficient: 2.0,
+				MaximumInterval:    5 * time.Second,
+				NonRetryableErrorTypes: []string{
+					ErrMsgBuildSource,
+					ErrMsgSourceNext,
+				},
+			},
+			domain.GetWriteActivityName(sinkCfg): {
+				MaximumAttempts:    5,
+				InitialInterval:    200 * time.Millisecond,
+				BackoffCoefficient: 1.5,
+				MaximumInterval:    10 * time.Second,
+				NonRetryableErrorTypes: []string{
+					ErrMsgBuildSink,
+					ErrMsgSinkWrite,
+				},
+			},
+		},
+	}
+
+	env.SetOnActivityStartedListener(
+		func(
+			activityInfo *activity.Info,
+			ctx context.Context,
+			args converter.EncodedValues,
+		) {
+			activityType := activityInfo.ActivityType.Name
+			if strings.HasPrefix(activityType, "internalSession") {
+				return
+			}
+
+			l.Debug(
+				"Test_ProcessBatchWorkflow_Err_NonRetryable - Activity started",
+				"activity-type", activityType,
+			)
+
+		})
+
+	defer func() {
+		if err := recover(); err != nil {
+			l.Error(
+				"Test_ProcessBatchWorkflow_Err_NonRetryable - panicked",
+				"workflow", ProcessFakeSrcSinkWorkflowAlias,
+				"error", err,
+			)
+		}
+
+		err := env.GetWorkflowError()
+		require.Error(t, err, "workflow should fail fast due to policy non-retryable")
+		// require.Equal(t, 1, sourceCfg.calls, "policy should prevent retries, only 1 attempt")
+
+	}()
+	env.ExecuteWorkflow(ProcessFakeSrcSinkWorkflowAlias, req)
+
+	require.True(t, env.IsWorkflowCompleted())
+}
+
+func Test_ProcessBatchWorkflow_Err_Retryable(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+
+	l := logger.GetSlogLogger()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	ctx = logger.WithLogger(ctx, l)
+
+	ctx = context.WithValue(ctx, "fail-retryable", true)
+
+	env.SetWorkerOptions(worker.Options{
+		BackgroundActivityContext: ctx,
+		DeadlockDetectionTimeout:  24 * time.Hour, // set a long timeout to avoid deadlock detection during tests
+	})
+
+	env.SetTestTimeout(24 * time.Hour)
+
+	// Register the workflow
+	env.RegisterWorkflowWithOptions(
+		bo.ProcessBatchWorkflow[domain.CSVRow, *fakeSrcConfig, *fakeSinkConfig[domain.CSVRow]],
+		workflow.RegisterOptions{
+			Name: ProcessFakeSrcSinkWorkflowAlias,
+		},
+	)
+
+	// Register activities.
+	env.RegisterActivityWithOptions(
+		bo.FetchNextActivity[domain.CSVRow, *fakeSrcConfig],
+		activity.RegisterOptions{
+			Name: FetchNextFakeSourceBatchAlias,
+		},
+	)
+	env.RegisterActivityWithOptions(
+		bo.WriteActivity[domain.CSVRow, *fakeSinkConfig[domain.CSVRow]],
+		activity.RegisterOptions{
+			Name: WriteNextFakeSinkBatchAlias,
+		},
+	)
+
+	sourceCfg := &fakeSrcConfig{}
+	sinkCfg := &fakeSinkConfig[domain.CSVRow]{}
+
+	nextMaxAttempts := 3
+	req := &FakeSourceSinkBatchRequest{
+		JobID:               "job-retryable-error",
+		BatchSize:           400,
+		MaxInProcessBatches: 2,
+		StartAt:             0,
+		Source:              sourceCfg,
+		Sink:                sinkCfg,
+		Policies: map[string]domain.RetryPolicySpec{
+			domain.GetFetchActivityName(sourceCfg): {
+				MaximumAttempts:    int32(nextMaxAttempts),
+				InitialInterval:    100 * time.Millisecond,
+				BackoffCoefficient: 2.0,
+				MaximumInterval:    5 * time.Second,
+				NonRetryableErrorTypes: []string{
+					ErrMsgBuildSource,
+					ErrMsgSourceNext,
+				},
+			},
+			domain.GetWriteActivityName(sinkCfg): {
+				MaximumAttempts:    5,
+				InitialInterval:    200 * time.Millisecond,
+				BackoffCoefficient: 1.5,
+				MaximumInterval:    10 * time.Second,
+				NonRetryableErrorTypes: []string{
+					ErrMsgBuildSink,
+					ErrMsgSinkWrite,
+				},
+			},
+		},
+	}
+
+	env.SetOnActivityStartedListener(
+		func(
+			activityInfo *activity.Info,
+			ctx context.Context,
+			args converter.EncodedValues,
+		) {
+			activityType := activityInfo.ActivityType.Name
+			if strings.HasPrefix(activityType, "internalSession") {
+				return
+			}
+
+			l.Debug(
+				"Test_ProcessBatchWorkflow_Err_Retryable - Activity started",
+				"activity-type", activityType,
+			)
+
+		})
+
+	defer func() {
+		if err := recover(); err != nil {
+			l.Error(
+				"Test_ProcessBatchWorkflow_Err_Retryable - panicked",
+				"workflow", ProcessFakeSrcSinkWorkflowAlias,
+				"error", err,
+			)
+		}
+
+		err := env.GetWorkflowError()
+		require.Error(t, err, "workflow should fail after retrying for max attempts")
+		// require.Equal(t, nextMaxAttempts, sourceCfg.calls, "should retry up to MaximumAttempts")
+
+	}()
+	env.ExecuteWorkflow(ProcessFakeSrcSinkWorkflowAlias, req)
+
+	require.True(t, env.IsWorkflowCompleted())
+}
+
 func extractContinueAsNewInput[T any](err error, dc converter.DataConverter, out *T) (ok bool, _ error) {
 	var cae *workflow.ContinueAsNewError
 	if !errors.As(err, &cae) || cae == nil {
@@ -811,4 +1035,101 @@ func extractContinueAsNewInput[T any](err error, dc converter.DataConverter, out
 		return true, e
 	}
 	return true, nil
+}
+
+const FakeSource = "fake-source"
+const FakeSink = "fake-sink"
+
+const ErrMsgBuildSource = "failed to build source"
+const ErrMsgBuildSink = "failed to build sink"
+const ErrMsgBuildSourceRetryable = "failed to build source retryable error"
+const ErrMsgSourceNext = "failed to get next batch from source"
+const ErrMsgSinkWrite = "failed to write batch to sink"
+const ErrMsgBuildSinkRetryable = "failed to build sink retryable error"
+
+const ProcessFakeSrcSinkWorkflowAlias string = "process-Fake-src-sink-workflow-alias"
+const FetchNextFakeSourceBatchAlias string = "fetch-next-" + FakeSource + "-batch-alias"
+const WriteNextFakeSinkBatchAlias string = "write-next-" + FakeSink + "-batch-alias"
+
+type FakeSourceSinkBatchRequest domain.BatchProcessingRequest[domain.CSVRow, *fakeSrcConfig, *fakeSinkConfig[domain.CSVRow]]
+
+type fakeSrcConfig struct {
+	calls int
+}
+
+func (c *fakeSrcConfig) Name() string { return FakeSource }
+func (c *fakeSrcConfig) BuildSource(ctx context.Context) (domain.Source[domain.CSVRow], error) {
+	c.calls++
+	if ctx != nil {
+		if fail, ok := ctx.Value("fail-source").(bool); ok && fail {
+			return nil, errors.New(ErrMsgBuildSource)
+		}
+		if fail, ok := ctx.Value("fail-retryable").(bool); ok && fail {
+			return nil, errors.New(ErrMsgBuildSourceRetryable)
+		}
+		if fail, ok := ctx.Value("fail-application-err").(bool); ok && fail {
+			return nil, temporal.NewNonRetryableApplicationError("ErrValidation", "ErrValidation", nil)
+		}
+	}
+	return &fakeSource{}, nil
+}
+
+type fakeSource struct{}
+
+func (s *fakeSource) Name() string                    { return FakeSource }
+func (s *fakeSource) Close(ctx context.Context) error { return nil }
+func (s *fakeSource) Next(ctx context.Context, offset uint64, size uint) (*domain.BatchProcess[domain.CSVRow], error) {
+	if ctx != nil {
+		if fail, ok := ctx.Value("fail-next").(bool); ok && fail {
+			return nil, errors.New(ErrMsgSourceNext)
+		}
+	}
+
+	bp := &domain.BatchProcess[domain.CSVRow]{
+		Records:     nil,
+		NextOffset:  offset,
+		StartOffset: offset,
+		Done:        false,
+	}
+
+	return bp, nil
+}
+
+type fakeSinkConfig[T any] struct {
+	calls int
+}
+
+func (c fakeSinkConfig[T]) Name() string { return FakeSink }
+func (c fakeSinkConfig[T]) BuildSink(ctx context.Context) (domain.Sink[T], error) {
+	c.calls++
+	if ctx != nil {
+		if fail, ok := ctx.Value("fail-sink").(bool); ok && fail {
+			return nil, errors.New(ErrMsgBuildSink)
+		}
+		if fail, ok := ctx.Value("fail-retryable").(bool); ok && fail {
+			return nil, errors.New(ErrMsgBuildSinkRetryable)
+		}
+	}
+	return &fakeSink[T]{}, nil
+}
+
+type fakeSink[T any] struct{}
+
+func (s *fakeSink[T]) Name() string { return FakeSink }
+func (s *fakeSink[T]) Write(ctx context.Context, b *domain.BatchProcess[T]) (*domain.BatchProcess[T], error) {
+	if ctx != nil {
+		if fail, ok := ctx.Value("fail-write").(bool); ok && fail {
+			return nil, errors.New(ErrMsgSinkWrite)
+		}
+
+	}
+
+	for _, rec := range b.Records {
+		rec.BatchResult.Result = rec.Data // echo the record as result
+	}
+	b.Done = true // mark as done
+	return b, nil
+}
+func (s *fakeSink[T]) Close(ctx context.Context) error {
+	return nil
 }

@@ -13,6 +13,8 @@ import (
 	"github.com/hankgalt/batch-orchestra/pkg/utils"
 )
 
+const LocalCSVSource = "local-csv-source"
+
 // Error constants and variables
 const (
 	ErrMsgLocalCSVTransformerNil     = "transformer function is not set for local CSV source with headers"
@@ -26,10 +28,6 @@ var (
 	ErrLocalCSVSizeMustBePositive = errors.New(ErrMsgLocalCSVSizeMustBePositive)
 	ErrLocalCSVPathRequired       = errors.New(ErrMsgLocalCSVPathRequired)
 	ErrLocalCSVFileNotFound       = errors.New(ErrMsgLocalCSVFileNotFound)
-)
-
-const (
-	LocalCSVSource = "local-csv-source"
 )
 
 // Local CSV source.
