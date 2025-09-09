@@ -106,61 +106,6 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		return req, temporal.NewApplicationErrorWithCause(ERR_QUERY_HANDLER, ERR_QUERY_HANDLER, ErrQueryHandler)
 	}
 
-	// Get the fetch and write activity aliases based on the source and sink
-	fetchActivityAlias := domain.GetFetchActivityName(req.Source)
-	writeActivityAlias := domain.GetWriteActivityName(req.Sink)
-
-	// setup activity options
-	ao := workflow.ActivityOptions{
-		StartToCloseTimeout: time.Minute * 10,
-		RetryPolicy: &temporal.RetryPolicy{
-			MaximumAttempts: 5,
-			NonRetryableErrorTypes: []string{
-				"SomeNonRetryableError",
-			},
-		},
-	}
-
-	fetchAO := ao
-	if policy, ok := req.Policies[fetchActivityAlias]; ok {
-		if policy.MaximumAttempts > 0 {
-			fetchAO.RetryPolicy.MaximumAttempts = policy.MaximumAttempts
-		}
-		if policy.InitialInterval > 0 {
-			fetchAO.RetryPolicy.InitialInterval = policy.InitialInterval
-		}
-		if policy.BackoffCoefficient > 0 {
-			fetchAO.RetryPolicy.BackoffCoefficient = policy.BackoffCoefficient
-		}
-		if policy.MaximumInterval > 0 {
-			fetchAO.RetryPolicy.MaximumInterval = policy.MaximumInterval
-		}
-		if len(policy.NonRetryableErrorTypes) > 0 {
-			fetchAO.RetryPolicy.NonRetryableErrorTypes = policy.NonRetryableErrorTypes
-		}
-	}
-	fetchCtx := workflow.WithActivityOptions(ctx, fetchAO)
-
-	writeAO := ao
-	if policy, ok := req.Policies[writeActivityAlias]; ok {
-		if policy.MaximumAttempts > 0 {
-			writeAO.RetryPolicy.MaximumAttempts = policy.MaximumAttempts
-		}
-		if policy.InitialInterval > 0 {
-			writeAO.RetryPolicy.InitialInterval = policy.InitialInterval
-		}
-		if policy.BackoffCoefficient > 0 {
-			writeAO.RetryPolicy.BackoffCoefficient = policy.BackoffCoefficient
-		}
-		if policy.MaximumInterval > 0 {
-			writeAO.RetryPolicy.MaximumInterval = policy.MaximumInterval
-		}
-		if len(policy.NonRetryableErrorTypes) > 0 {
-			writeAO.RetryPolicy.NonRetryableErrorTypes = policy.NonRetryableErrorTypes
-		}
-	}
-	writeCtx := workflow.WithActivityOptions(ctx, writeAO)
-
 	// setup request state
 	if req.Batches == nil {
 		req.Batches = map[string]*domain.BatchProcess[T]{}
@@ -175,24 +120,37 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	if req.MaxBatches > WorkflowBatchLimit || req.MaxBatches < MinimumInProcessBatches {
 		req.MaxBatches = WorkflowBatchLimit
 	}
-
 	l.Debug(
-		"processBatchWorkflow context set with activity options",
+		"processBatchWorkflow request state hydrated",
 		"source", req.Source.Name(),
 		"sink", req.Sink.Name(),
 		"start-at", req.StartAt,
 		"workflow", wkflname,
 	)
-	// TODO retry case, check for error
 
-	// Initiate a new queue
-	batchCount := uint(0)
+	// Get the fetch and write activity aliases based on the source and sink
+	fetchActivityAlias := domain.GetFetchActivityName(req.Source)
+	writeActivityAlias := domain.GetWriteActivityName(req.Sink)
+
+	// setup activity options
+	fetchAO, writeAO := buildFetchAndWriteActivityOptions(req)
+
+	// setup fetch & write contexts
+	fetchCtx := workflow.WithActivityOptions(ctx, fetchAO)
+	writeCtx := workflow.WithActivityOptions(ctx, writeAO)
+
+	// TODO retry case, check for error
+	// Initiate a new queue & batch count
 	q := list.New()
+	batchCount := uint(0)
 	l.Debug(
-		"processBatchWorkflow queue initiated",
+		"processBatchWorkflow context set & queue initiated",
 		"source", req.Source.Name(),
 		"sink", req.Sink.Name(),
 		"workflow", wkflname,
+		"start-at", req.StartAt,
+		"fetch-activity", fetchActivityAlias,
+		"write-activity", writeActivityAlias,
 	)
 
 	// Fetch first batch from source
@@ -221,13 +179,17 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		"processBatchWorkflow first batch pushed to queue",
 		"source", req.Source.Name(),
 		"sink", req.Sink.Name(),
+		"start-at", req.StartAt,
 		"workflow", wkflname,
+		"fetch-activity", fetchActivityAlias,
+		"write-activity", writeActivityAlias,
 	)
 
 	// While there are items in queue
 	for q.Len() > 0 {
 		if q.Len() < int(req.MaxInProcessBatches) && !req.Done && batchCount < req.MaxBatches {
-			// If # of items in queue are less than concurrent processing limit & there's more data
+			// If # of items in queue are less than concurrent processing limit,
+			// there's more data & max batch limit not reached
 			// Fetch the next batch from the source
 			if err := workflow.ExecuteActivity(fetchCtx, fetchActivityAlias, &domain.FetchInput[T, S]{
 				Source:    req.Source,
@@ -263,30 +225,43 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 			// Update request state
 			batchId := domain.GetBatchId(wOut.Batch.StartOffset, wOut.Batch.NextOffset, "", "")
 			if _, ok := req.Batches[batchId]; !ok {
-				req.Batches[batchId] = wOut.Batch
-			} else {
-				req.Batches[batchId] = wOut.Batch
+				l.Warn(
+					"processBatchWorkflow missing batch initial state",
+					"source", req.Source.Name(),
+					"sink", req.Sink.Name(),
+					"start-at", req.StartAt,
+					"workflow", wkflname,
+					"batch-id", batchId,
+					"fetch-activity", fetchActivityAlias,
+					"write-activity", writeActivityAlias,
+				)
 			}
+			req.Batches[batchId] = wOut.Batch
 		}
 	}
 
 	if !req.Done && batchCount >= req.MaxBatches {
 		// continue as new
 		startAt := req.Offsets[len(req.Offsets)-1]
-		lastBatch := req.Batches[domain.GetBatchId(req.Offsets[len(req.Offsets)-2], req.Offsets[len(req.Offsets)-1], "", "")]
 		l.Debug(
 			"processBatchWorkflow continuing as new",
 			"source", req.Source.Name(),
 			"sink", req.Sink.Name(),
-			"next-offset-offsets", startAt,
-			"next-offset-batches", lastBatch.NextOffset,
+			"curr-start-at", req.StartAt,
+			"new-start-at", startAt,
 			"batches-processed", batchCount,
 			"workflow", wkflname,
+			"fetch-activity", fetchActivityAlias,
+			"write-activity", writeActivityAlias,
 		)
 
+		// update request start at
 		req.StartAt = startAt
-
 		return nil, workflow.NewContinueAsNewError(ctx, wkflname, req)
+
+		// build new workflow request
+		// newReq := domain.BuildContinueAsNewWorkflowRequest(req, startAt)
+		// return req, workflow.NewContinueAsNewError(ctx, wkflname, newReq)
 	}
 
 	l.Debug(
@@ -294,7 +269,70 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		"source", req.Source.Name(),
 		"sink", req.Sink.Name(),
 		"workflow", wkflname,
+		"fetch-activity", fetchActivityAlias,
+		"write-activity", writeActivityAlias,
 		"batch-count", batchCount,
 	)
 	return req, nil
+}
+
+func buildFetchAndWriteActivityOptions[T any, S domain.SourceConfig[T], D domain.SinkConfig[T]](
+	req *domain.BatchProcessingRequest[T, S, D],
+) (workflow.ActivityOptions, workflow.ActivityOptions) {
+	// setup activity options
+	ao := workflow.ActivityOptions{
+		StartToCloseTimeout: time.Minute * 10,
+		RetryPolicy: &temporal.RetryPolicy{
+			MaximumAttempts: 5,
+			NonRetryableErrorTypes: []string{
+				"SomeNonRetryableError",
+			},
+		},
+	}
+
+	// Get the fetch and write activity aliases based on the source and sink
+	fetchActivityAlias := domain.GetFetchActivityName(req.Source)
+	writeActivityAlias := domain.GetWriteActivityName(req.Sink)
+
+	// merge provided fetch activity options & build fetch context
+	fetchAO := ao
+	if policy, ok := req.Policies[fetchActivityAlias]; ok {
+		if policy.MaximumAttempts > 0 {
+			fetchAO.RetryPolicy.MaximumAttempts = policy.MaximumAttempts
+		}
+		if policy.InitialInterval > 0 {
+			fetchAO.RetryPolicy.InitialInterval = policy.InitialInterval
+		}
+		if policy.BackoffCoefficient > 0 {
+			fetchAO.RetryPolicy.BackoffCoefficient = policy.BackoffCoefficient
+		}
+		if policy.MaximumInterval > 0 {
+			fetchAO.RetryPolicy.MaximumInterval = policy.MaximumInterval
+		}
+		if len(policy.NonRetryableErrorTypes) > 0 {
+			fetchAO.RetryPolicy.NonRetryableErrorTypes = policy.NonRetryableErrorTypes
+		}
+	}
+
+	// merge provided write activity options & build write context
+	writeAO := ao
+	if policy, ok := req.Policies[writeActivityAlias]; ok {
+		if policy.MaximumAttempts > 0 {
+			writeAO.RetryPolicy.MaximumAttempts = policy.MaximumAttempts
+		}
+		if policy.InitialInterval > 0 {
+			writeAO.RetryPolicy.InitialInterval = policy.InitialInterval
+		}
+		if policy.BackoffCoefficient > 0 {
+			writeAO.RetryPolicy.BackoffCoefficient = policy.BackoffCoefficient
+		}
+		if policy.MaximumInterval > 0 {
+			writeAO.RetryPolicy.MaximumInterval = policy.MaximumInterval
+		}
+		if len(policy.NonRetryableErrorTypes) > 0 {
+			writeAO.RetryPolicy.NonRetryableErrorTypes = policy.NonRetryableErrorTypes
+		}
+	}
+
+	return fetchAO, writeAO
 }

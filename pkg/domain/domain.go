@@ -2,6 +2,7 @@ package domain
 
 import (
 	"context"
+	"maps"
 	"time"
 )
 
@@ -128,4 +129,28 @@ type RetryPolicySpec struct {
 	MaximumInterval        time.Duration
 	MaximumAttempts        int32
 	NonRetryableErrorTypes []string
+}
+
+func BuildContinueAsNewWorkflowRequest[T any, S SourceConfig[T], D SinkConfig[T]](
+	src *BatchProcessingRequest[T, S, D],
+	startAt uint64,
+) *BatchProcessingRequest[T, S, D] {
+	// Clone request for new workflow
+	newReq := &BatchProcessingRequest[T, S, D]{
+		MaxInProcessBatches: src.MaxInProcessBatches,
+		BatchSize:           src.BatchSize,
+		MaxBatches:          src.MaxBatches,
+		JobID:               src.JobID,
+		Source:              src.Source,
+		Sink:                src.Sink,
+		Done:                src.Done,
+	}
+	// Clone Policies map
+	if src.Policies != nil {
+		newReq.Policies = make(map[string]RetryPolicySpec, len(src.Policies))
+		maps.Copy(newReq.Policies, src.Policies)
+	}
+
+	newReq.StartAt = startAt
+	return newReq
 }
