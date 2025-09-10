@@ -2,11 +2,14 @@ package batch_orchestra
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 
 	"github.com/hankgalt/batch-orchestra/internal/sinks"
+	"github.com/hankgalt/batch-orchestra/internal/snapshotters"
 	"github.com/hankgalt/batch-orchestra/internal/sources"
 	"github.com/hankgalt/batch-orchestra/pkg/domain"
 )
@@ -19,8 +22,8 @@ const (
 	FetchNextLocalCSVSourceBatchAlias string = "fetch-next-" + sources.LocalCSVSource + "-batch-alias"
 	FetchNextCloudCSVSourceBatchAlias string = "fetch-next-" + sources.CloudCSVSource + "-batch-alias"
 	WriteNextNoopSinkBatchAlias       string = "write-next-" + sinks.NoopSink + "-batch-alias"
-	WriteNextMongoSinkBatchAlias      string = "write-next-" + sinks.MongoSink + "-batch-alias"
 	WriteNextSQLLiteSinkBatchAlias    string = "write-next-" + sinks.SQLLiteSink + "-batch-alias"
+	SnapshotLocalFileAlias            string = "snapshot-" + snapshotters.LocalFileSnapshotter + "-alias"
 )
 
 // FetchNextActivity fetches the next batch of data from the source.
@@ -96,4 +99,95 @@ func WriteActivity[T any, D domain.SinkConfig[T]](
 	return &domain.WriteOutput[T]{
 		Batch: out,
 	}, nil
+}
+
+func SnapshotActivity[T any, S domain.SourceConfig[T], D domain.SinkConfig[T], SS domain.SnapshotConfig](
+	ctx context.Context,
+	req *domain.BatchProcessingRequest[T, S, D, SS],
+) (*domain.BatchSnapshot, error) {
+	l := activity.GetLogger(ctx)
+	l.Debug("SnapshotActivity started")
+
+	sk, err := req.Snapshotter.BuildSnapshotter(ctx)
+	if err != nil {
+		l.Error("error building snapshotter", "error", err.Error())
+		return nil, temporal.NewApplicationErrorWithCause(err.Error(), err.Error(), err)
+	}
+	defer func() {
+		if err := sk.Close(ctx); err != nil {
+			l.Error("error closing snapshotter", "error", err.Error())
+		}
+	}()
+
+	// Build batch snapshot
+	snapshot := buildRequestSnapshot(req)
+
+	// Build batch result summary
+	batchResult := &domain.BatchProcessingResult[T]{
+		JobID:   req.JobID,
+		StartAt: req.StartAt,
+		Done:    req.Done,
+		Offsets: req.Offsets,
+		Batches: req.Batches,
+	}
+
+	// Serialize batch result summary
+	resultJSON, err := json.MarshalIndent(batchResult, "", "  ")
+	if err != nil {
+		l.Error("error marshalling batch results", "error", err.Error())
+		return snapshot, temporal.NewApplicationErrorWithCause(err.Error(), err.Error(), err)
+	}
+
+	// Save batch result summary
+	key := fmt.Sprintf("%s-%d", req.JobID, req.StartAt)
+	err = sk.Snapshot(ctx, key, resultJSON)
+	if err != nil {
+		l.Error("error saving snapshot", "error", err.Error())
+		return snapshot, temporal.NewApplicationErrorWithCause(err.Error(), err.Error(), err)
+	}
+
+	// return batch snapshot
+	return snapshot, nil
+}
+
+func buildRequestSnapshot[T any, S domain.SourceConfig[T], D domain.SinkConfig[T], SS domain.SnapshotConfig](
+	req *domain.BatchProcessingRequest[T, S, D, SS],
+) *domain.BatchSnapshot {
+	errRecs := map[string][]domain.ErrorRecord{}
+	numProcessed := uint(len(req.Batches))
+	numRecords := uint(0)
+
+	if req.Snapshot != nil {
+		if req.Snapshot.Errors != nil {
+			errRecs = req.Snapshot.Errors
+		}
+		numProcessed += req.Snapshot.NumProcessed
+		numRecords += req.Snapshot.NumRecords
+	}
+
+	// Collect errors from batches
+	for id, b := range req.Batches {
+		var errs []domain.ErrorRecord
+		for _, r := range b.Records {
+			if r.BatchResult.Error != "" {
+				errs = append(errs, domain.ErrorRecord{
+					Start: r.Start,
+					End:   r.End,
+					Error: r.BatchResult.Error,
+				})
+			} else {
+				numRecords++
+			}
+		}
+		if len(errs) > 0 {
+			errRecs[id] = errs
+		}
+	}
+
+	return &domain.BatchSnapshot{
+		Done:         req.Done,
+		NumProcessed: numProcessed,
+		NumRecords:   numRecords,
+		Errors:       errRecs,
+	}
 }

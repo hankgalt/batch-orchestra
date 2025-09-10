@@ -22,18 +22,17 @@ import (
 	"github.com/comfforts/logger"
 
 	bo "github.com/hankgalt/batch-orchestra"
-	"github.com/hankgalt/batch-orchestra/internal/clients/mongodb"
 	sqllite "github.com/hankgalt/batch-orchestra/internal/clients/sql_lite"
 	"github.com/hankgalt/batch-orchestra/internal/sinks"
+	"github.com/hankgalt/batch-orchestra/internal/snapshotters"
 	"github.com/hankgalt/batch-orchestra/internal/sources"
 	"github.com/hankgalt/batch-orchestra/pkg/domain"
 	"github.com/hankgalt/batch-orchestra/pkg/utils"
 )
 
-type LocalCSVMongoBatchRequest domain.BatchProcessingRequest[domain.CSVRow, sources.LocalCSVConfig, sinks.MongoSinkConfig[domain.CSVRow]]
-type LocalCSVNoopBatchRequest domain.BatchProcessingRequest[domain.CSVRow, sources.LocalCSVConfig, sinks.NoopSinkConfig[domain.CSVRow]]
-type CloudCSVMongoBatchRequest domain.BatchProcessingRequest[domain.CSVRow, sources.CloudCSVConfig, sinks.MongoSinkConfig[domain.CSVRow]]
-type LocalCSVSQLLiteBatchRequest domain.BatchProcessingRequest[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow]]
+type LocalCSVNoopBatchRequest domain.BatchProcessingRequest[domain.CSVRow, sources.LocalCSVConfig, sinks.NoopSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig]
+type CloudCSVSQLLiteBatchRequest domain.BatchProcessingRequest[domain.CSVRow, sources.CloudCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig]
+type LocalCSVSQLLiteBatchRequest domain.BatchProcessingRequest[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig]
 
 type ProcessBatchWorkflowTestSuite struct {
 	suite.Suite
@@ -62,8 +61,8 @@ func (s *ProcessBatchWorkflowTestSuite) TearDownTest() {
 
 }
 
-// Setup mongo cluster & setup mongo & cloud test environment, before running this test.
-func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_Mongo_HappyPath() {
+// Setup cloud test environment, before running this test.
+func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath() {
 	l := s.GetLogger()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 	defer cancel()
@@ -80,9 +79,9 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_Mongo
 	s.Run("valid cloud csv to mongo migration request", func() {
 		// Register the workflow
 		s.env.RegisterWorkflowWithOptions(
-			bo.ProcessBatchWorkflow[domain.CSVRow, sources.CloudCSVConfig, sinks.MongoSinkConfig[domain.CSVRow]],
+			bo.ProcessBatchWorkflow[domain.CSVRow, sources.CloudCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
 			workflow.RegisterOptions{
-				Name: bo.ProcessCloudCSVMongoWorkflowAlias,
+				Name: bo.ProcessCloudCSVSQLLiteWorkflowAlias,
 			},
 		)
 
@@ -94,9 +93,15 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_Mongo
 			},
 		)
 		s.env.RegisterActivityWithOptions(
-			bo.WriteActivity[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]],
+			bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 			activity.RegisterOptions{
-				Name: bo.WriteNextMongoSinkBatchAlias,
+				Name: bo.WriteNextSQLLiteSinkBatchAlias,
+			},
+		)
+		s.env.RegisterActivityWithOptions(
+			bo.SnapshotActivity[domain.CSVRow, sources.CloudCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
+			activity.RegisterOptions{
+				Name: bo.SnapshotLocalFileAlias,
 			},
 		)
 
@@ -115,26 +120,43 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_Mongo
 		}
 
 		// Sink - MongoDB
-		mCfg := utils.BuildMongoStoreConfig()
-		s.Require().NotEmpty(mCfg.DBName, "MongoDB DBName should not be empty")
-		s.Require().NotEmpty(mCfg.Host, "MongoDB host should not be empty")
-		sinkCfg := sinks.MongoSinkConfig[domain.CSVRow]{
-			Protocol:   mCfg.Protocol,
-			Host:       mCfg.Host,
-			DBName:     mCfg.DBName,
-			User:       mCfg.User,
-			Pwd:        mCfg.Pwd,
-			Params:     mCfg.Params,
-			Collection: "vypar.agents",
+		dbFile := "data/__deleteme.db"
+		dbClient, err := sqllite.NewSQLLiteDBClient(dbFile)
+		s.NoError(err)
+
+		defer func(cl *sqllite.SQLLiteDBClient, fpath string) {
+			ags, err := cl.FetchRecords(context.Background(), "agent", 0, 30)
+			s.NoError(err)
+			s.Equal(len(ags), 25)
+
+			s.NoError(cl.Close(ctx), "close db client")
+			s.NoError(os.Remove(fpath), "cleanup temp db file")
+		}(dbClient, dbFile)
+
+		res := dbClient.ExecuteSchema(sqllite.AgentSchema)
+		n, err := res.LastInsertId()
+		s.NoError(err)
+		s.Equal(int64(0), n)
+
+		sinkCfg := sinks.SQLLiteSinkConfig[domain.CSVRow]{
+			DBFile: dbFile,
+			Table:  "agent",
 		}
 
-		req := &CloudCSVMongoBatchRequest{
-			JobID:               "cloud-csv-mongo-happy",
+		filePath, err := utils.BuildFilePath()
+		s.NoError(err, "error building csv file path for test")
+		ssCfg := snapshotters.LocalFileSnapshotterConfig{
+			Path: filePath,
+		}
+
+		req := &CloudCSVSQLLiteBatchRequest{
+			JobID:               "job-cloud-csv-sqllite-happy",
 			BatchSize:           400,
 			MaxInProcessBatches: 2,
 			StartAt:             0,
 			Source:              sourceCfg,
 			Sink:                sinkCfg,
+			Snapshotter:         ssCfg,
 		}
 
 		s.env.SetOnActivityStartedListener(
@@ -149,7 +171,7 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_Mongo
 				}
 
 				l.Debug(
-					"Test_ProcessBatchWorkflow_CloudCSV_Mongo_HappyPath - Activity started",
+					"Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - Activity started",
 					"activityType", activityType,
 				)
 
@@ -158,46 +180,53 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_Mongo
 		defer func() {
 			if err := recover(); err != nil {
 				l.Error(
-					"Test_ProcessBatchWorkflow_CloudCSV_Mongo_HappyPath - panicked",
-					"workflow", bo.ProcessCloudCSVMongoWorkflowAlias, "error", err,
+					"Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - panicked",
+					"workflow", bo.ProcessCloudCSVSQLLiteWorkflowAlias, "error", err,
 				)
 			}
 
 			err := s.env.GetWorkflowError()
 			if err != nil {
 				l.Error(
-					"Test_ProcessBatchWorkflow_CloudCSV_Mongo_HappyPath - error",
-					"workflow", bo.ProcessCloudCSVMongoWorkflowAlias, "error", err,
+					"Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - error",
+					"workflow", bo.ProcessCloudCSVSQLLiteWorkflowAlias, "error", err,
 				)
 			} else {
-				var result CloudCSVMongoBatchRequest
+				var result CloudCSVSQLLiteBatchRequest
 				err := s.env.GetWorkflowResult(&result)
 				if err != nil {
 					l.Error(
-						"Test_ProcessBatchWorkflow_CloudCSV_Mongo_HappyPath - error",
-						"workflow", bo.ProcessCloudCSVMongoWorkflowAlias, "error", err,
+						"Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - error",
+						"workflow", bo.ProcessCloudCSVSQLLiteWorkflowAlias, "error", err,
 					)
 				} else {
 					l.Debug(
-						"Test_ProcessBatchWorkflow_CloudCSV_Mongo_HappyPath - success",
+						"Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - success",
 						"offsets", result.Offsets,
 						"num-batches-processed", len(result.Offsets),
 					)
+
+					s.EqualValues(10, uint(result.Snapshot.NumProcessed))
+					errorCount := 0
+					for _, errs := range result.Snapshot.Errors {
+						errorCount += len(errs)
+					}
+					s.EqualValues(25, uint(result.Snapshot.NumRecords))
+					s.EqualValues(0, errorCount)
 				}
 			}
 
 		}()
 
-		l.Debug("Test_ProcessBatchWorkflow_CloudCSV_Mongo_HappyPath - Starting workflow test")
-		s.env.ExecuteWorkflow(bo.ProcessCloudCSVMongoWorkflowAlias, req)
+		l.Debug("Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - Starting workflow test")
+		s.env.ExecuteWorkflow(bo.ProcessCloudCSVSQLLiteWorkflowAlias, req)
 		s.True(s.env.IsWorkflowCompleted())
-		l.Debug("Test_ProcessBatchWorkflow_CloudCSV_Mongo_HappyPath - test completed")
+		l.Debug("Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - test completed")
 	})
 }
 
-// Setup mongo cluster, setup local csv file,
-// & setup mongo test environment, before running this test.
-func Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath(t *testing.T) {
+// Setup local csv file before running this test.
+func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
 
@@ -215,9 +244,9 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath(t *testing.T) {
 
 	// Register the workflow
 	env.RegisterWorkflowWithOptions(
-		bo.ProcessBatchWorkflow[domain.CSVRow, sources.LocalCSVConfig, sinks.MongoSinkConfig[domain.CSVRow]],
+		bo.ProcessBatchWorkflow[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
 		workflow.RegisterOptions{
-			Name: bo.ProcessLocalCSVMongoWorkflowAlias,
+			Name: bo.ProcessLocalCSVSQLLiteWorkflowAlias,
 		},
 	)
 
@@ -229,9 +258,15 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath(t *testing.T) {
 		},
 	)
 	env.RegisterActivityWithOptions(
-		bo.WriteActivity[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]],
+		bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 		activity.RegisterOptions{
-			Name: bo.WriteNextMongoSinkBatchAlias,
+			Name: bo.WriteNextSQLLiteSinkBatchAlias,
+		},
+	)
+	env.RegisterActivityWithOptions(
+		bo.SnapshotActivity[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
+		activity.RegisterOptions{
+			Name: bo.SnapshotLocalFileAlias,
 		},
 	)
 
@@ -249,160 +284,42 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath(t *testing.T) {
 	}
 
 	// Sink - MongoDB
-	mCfg := utils.BuildMongoStoreConfig()
-	require.NotEmpty(t, mCfg.DBName, "MongoDB name should not be empty")
-	require.NotEmpty(t, mCfg.Host, "MongoDB host should not be empty")
-	sinkCfg := sinks.MongoSinkConfig[domain.CSVRow]{
-		Protocol:   mCfg.Protocol,
-		Host:       mCfg.Host,
-		DBName:     mCfg.DBName,
-		User:       mCfg.User,
-		Pwd:        mCfg.Pwd,
-		Params:     mCfg.Params,
-		Collection: "vypar.agents",
+	dbFile := "data/__deleteme.db"
+	dbClient, err := sqllite.NewSQLLiteDBClient(dbFile)
+	require.NoError(t, err)
+
+	defer func(cl *sqllite.SQLLiteDBClient, fpath string) {
+		ags, err := cl.FetchRecords(context.Background(), "agent", 0, 15)
+		require.NoError(t, err)
+		require.Equal(t, len(ags), 11)
+
+		require.NoError(t, cl.Close(ctx), "close db client")
+		require.NoError(t, os.Remove(fpath), "cleanup temp db file")
+	}(dbClient, dbFile)
+
+	res := dbClient.ExecuteSchema(sqllite.AgentSchema)
+	n, err := res.LastInsertId()
+	require.NoError(t, err)
+	require.Equal(t, int64(0), n)
+
+	sinkCfg := sinks.SQLLiteSinkConfig[domain.CSVRow]{
+		DBFile: dbFile,
+		Table:  "agent",
 	}
 
-	req := &LocalCSVMongoBatchRequest{
-		JobID:               "job-happy",
-		BatchSize:           400,
-		MaxInProcessBatches: 2,
-		StartAt:             0,
-		Source:              sourceCfg,
-		Sink:                sinkCfg,
+	ssCfg := snapshotters.LocalFileSnapshotterConfig{
+		Path: filePath,
 	}
 
-	env.SetOnActivityStartedListener(
-		func(
-			activityInfo *activity.Info,
-			ctx context.Context,
-			args converter.EncodedValues,
-		) {
-			activityType := activityInfo.ActivityType.Name
-			if strings.HasPrefix(activityType, "internalSession") {
-				return
-			}
-
-			l.Debug(
-				"Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath - Activity started",
-				"activity-type", activityType,
-			)
-
-		})
-
-	defer func() {
-		if err := recover(); err != nil {
-			l.Error(
-				"Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath - panicked",
-				"workflow", bo.ProcessLocalCSVMongoWorkflowAlias,
-				"error", err,
-			)
-		}
-
-		err := env.GetWorkflowError()
-		if err != nil {
-			l.Error(
-				"Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath - error",
-				"error", err.Error(),
-			)
-		} else {
-			var result LocalCSVMongoBatchRequest
-			err := env.GetWorkflowResult(&result)
-			if err != nil {
-				l.Error(
-					"Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath - error",
-					"error", err.Error(),
-				)
-			} else {
-				l.Debug(
-					"Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath - success",
-					"result-offsets", result.Offsets,
-					"num-batches-processed", len(result.Offsets),
-				)
-			}
-		}
-
-	}()
-
-	env.ExecuteWorkflow(bo.ProcessLocalCSVMongoWorkflowAlias, req)
-
-	require.True(t, env.IsWorkflowCompleted())
-
-}
-
-// Setup mongo cluster, setup local csv file & setup mongo test env vars, before running this test.
-func Test_ProcessBatchWorkflow_LocalCSV_Mongo_ContinueAsNewError(t *testing.T) {
-	var suite testsuite.WorkflowTestSuite
-	env := suite.NewTestWorkflowEnvironment()
-
-	l := logger.GetSlogLogger()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	ctx = logger.WithLogger(ctx, l)
-
-	env.SetWorkerOptions(worker.Options{
-		BackgroundActivityContext: ctx,
-		DeadlockDetectionTimeout:  24 * time.Hour, // set a long timeout to avoid deadlock detection during tests
-	})
-
-	env.SetTestTimeout(24 * time.Hour)
-
-	// Register the workflow
-	env.RegisterWorkflowWithOptions(
-		bo.ProcessBatchWorkflow[domain.CSVRow, sources.LocalCSVConfig, sinks.MongoSinkConfig[domain.CSVRow]],
-		workflow.RegisterOptions{
-			Name: bo.ProcessLocalCSVMongoWorkflowAlias,
-		},
-	)
-
-	// Register activities.
-	env.RegisterActivityWithOptions(
-		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
-		activity.RegisterOptions{
-			Name: bo.FetchNextLocalCSVSourceBatchAlias,
-		},
-	)
-	env.RegisterActivityWithOptions(
-		bo.WriteActivity[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]],
-		activity.RegisterOptions{
-			Name: bo.WriteNextMongoSinkBatchAlias,
-		},
-	)
-
-	// Build source & sink configurations
-	// Source - local CSV
-	fileName := utils.BuildFileName()
-	filePath, err := utils.BuildFilePath()
-	require.NoError(t, err, "error building csv file path for test")
-	path := filepath.Join(filePath, fileName)
-	sourceCfg := sources.LocalCSVConfig{
-		Path:         path,
-		Delimiter:    '|',
-		HasHeader:    true,
-		MappingRules: domain.BuildBusinessModelTransformRules(),
-	}
-
-	// Sink - MongoDB
-	mCfg := utils.BuildMongoStoreConfig()
-	require.NotEmpty(t, mCfg.DBName, "MongoDB name should not be empty")
-	require.NotEmpty(t, mCfg.Host, "MongoDB host should not be empty")
-	sinkCfg := sinks.MongoSinkConfig[domain.CSVRow]{
-		Protocol:   mCfg.Protocol,
-		Host:       mCfg.Host,
-		DBName:     mCfg.DBName,
-		User:       mCfg.User,
-		Pwd:        mCfg.Pwd,
-		Params:     mCfg.Params,
-		Collection: "vypar.agents",
-	}
-
-	req := &LocalCSVMongoBatchRequest{
-		JobID:               "job-happy",
+	req := &LocalCSVSQLLiteBatchRequest{
+		JobID:               "job-local-csv-sqllite-continue-as-new-error-happy",
 		BatchSize:           400,
 		MaxInProcessBatches: 2,
 		MaxBatches:          6,
 		StartAt:             0,
 		Source:              sourceCfg,
 		Sink:                sinkCfg,
+		Snapshotter:         ssCfg,
 	}
 
 	env.SetOnActivityStartedListener(
@@ -417,7 +334,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_ContinueAsNewError(t *testing.T) {
 			}
 
 			l.Debug(
-				"Test_ProcessBatchWorkflow_LocalCSV_Mongo_ContinueAsNewError - Activity started",
+				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError - Activity started",
 				"activity-type", activityType,
 			)
 
@@ -426,8 +343,8 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_ContinueAsNewError(t *testing.T) {
 	defer func() {
 		if err := recover(); err != nil {
 			l.Error(
-				"Test_ProcessBatchWorkflow_LocalCSV_Mongo_ContinueAsNewError - panicked",
-				"workflow", bo.ProcessLocalCSVMongoWorkflowAlias,
+				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError - panicked",
+				"workflow", bo.ProcessLocalCSVSQLLiteWorkflowAlias,
 				"error", err,
 			)
 		}
@@ -435,9 +352,9 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_ContinueAsNewError(t *testing.T) {
 		err := env.GetWorkflowError()
 		var ca *workflow.ContinueAsNewError
 		require.True(t, errors.As(err, &ca), "expected ContinueAsNewError, got: %v", err)
-		require.Equal(t, bo.ProcessLocalCSVMongoWorkflowAlias, ca.WorkflowType.Name, "expected workflow type to match")
+		require.Equal(t, bo.ProcessLocalCSVSQLLiteWorkflowAlias, ca.WorkflowType.Name, "expected workflow type to match")
 
-		var next LocalCSVMongoBatchRequest
+		var next LocalCSVSQLLiteBatchRequest
 		ok, decErr := extractContinueAsNewInput(err, converter.GetDefaultDataConverter(), &next)
 		require.True(t, ok, "expected to extract continue-as-new input, got error: %v", decErr)
 		require.NoError(t, decErr, "error extracting continue-as-new input")
@@ -445,15 +362,15 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_ContinueAsNewError(t *testing.T) {
 		require.True(t, next.StartAt > req.StartAt, "expected next.StartAt > req.StartAt")
 	}()
 
-	env.ExecuteWorkflow(bo.ProcessLocalCSVMongoWorkflowAlias, req)
+	env.ExecuteWorkflow(bo.ProcessLocalCSVSQLLiteWorkflowAlias, req)
 	require.True(t, env.IsWorkflowCompleted())
 
 }
 
 // Integration test for ProcessBatchWorkflow on a dev Temporal server.
-// Start temporal dev server, setup mongo cluster, setup local csv file,
-// & setup mongo, temporal test environment, before running this test.
-func Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath_Server(t *testing.T) {
+// Start temporal dev server, setup local csv file &
+// setup temporal test environment, before running this test.
+func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath_Server(t *testing.T) {
 	// get test logger
 	l := logger.GetSlogLogger()
 
@@ -471,7 +388,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath_Server(t *testing.T) {
 	defer c.Close()
 
 	// workflow task queue
-	const tq = "process-batch-workflow-local-csv-mongo-tq"
+	const tq = "process-batch-workflow-local-csv-sqllite-tq"
 
 	// Temporal worker for the task queue
 	w := worker.New(c, tq, worker.Options{
@@ -481,9 +398,9 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath_Server(t *testing.T) {
 
 	// Register the workflow function
 	w.RegisterWorkflowWithOptions(
-		bo.ProcessBatchWorkflow[domain.CSVRow, sources.LocalCSVConfig, sinks.MongoSinkConfig[domain.CSVRow]],
+		bo.ProcessBatchWorkflow[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
 		workflow.RegisterOptions{
-			Name: bo.ProcessLocalCSVMongoWorkflowAlias,
+			Name: bo.ProcessLocalCSVSQLLiteWorkflowAlias,
 		},
 	)
 
@@ -495,9 +412,15 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath_Server(t *testing.T) {
 		},
 	)
 	w.RegisterActivityWithOptions(
-		bo.WriteActivity[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]],
+		bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 		activity.RegisterOptions{
-			Name: bo.WriteNextMongoSinkBatchAlias,
+			Name: bo.WriteNextSQLLiteSinkBatchAlias,
+		},
+	)
+	w.RegisterActivityWithOptions(
+		bo.SnapshotActivity[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
+		activity.RegisterOptions{
+			Name: bo.SnapshotLocalFileAlias,
 		},
 	)
 
@@ -505,7 +428,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath_Server(t *testing.T) {
 	go func() {
 		// Stop worker when test ends.
 		if err := w.Run(worker.InterruptCh()); err != nil {
-			l.Error("Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath_Server - worker stopped:", "error", err.Error())
+			l.Error("Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath_Server - worker stopped:", "error", err.Error())
 		}
 	}()
 
@@ -522,28 +445,43 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath_Server(t *testing.T) {
 		MappingRules: domain.BuildBusinessModelTransformRules(),
 	}
 
-	// Sink - MongoDB
-	mCfg := utils.BuildMongoStoreConfig()
-	require.NotEmpty(t, mCfg.DBName, "MongoDB name should not be empty")
-	require.NotEmpty(t, mCfg.Host, "MongoDB host should not be empty")
-	sinkCfg := sinks.MongoSinkConfig[domain.CSVRow]{
-		Protocol:   mCfg.Protocol,
-		Host:       mCfg.Host,
-		DBName:     mCfg.DBName,
-		User:       mCfg.User,
-		Pwd:        mCfg.Pwd,
-		Params:     mCfg.Params,
-		Collection: "vypar.agents",
+	// Sink - SQLLite
+	dbFile := "data/__deleteme.db"
+	dbClient, err := sqllite.NewSQLLiteDBClient(dbFile)
+	require.NoError(t, err)
+
+	defer func(cl *sqllite.SQLLiteDBClient, fpath string) {
+		ags, err := cl.FetchRecords(context.Background(), "agent", 0, 25)
+		require.NoError(t, err)
+		require.Equal(t, len(ags), 20)
+
+		require.NoError(t, cl.Close(ctx), "close db client")
+		require.NoError(t, os.Remove(fpath), "cleanup temp db file")
+	}(dbClient, dbFile)
+
+	res := dbClient.ExecuteSchema(sqllite.AgentSchema)
+	n, err := res.LastInsertId()
+	require.NoError(t, err)
+	require.Equal(t, int64(0), n)
+
+	sinkCfg := sinks.SQLLiteSinkConfig[domain.CSVRow]{
+		DBFile: dbFile,
+		Table:  "agent",
 	}
 
-	req := &LocalCSVMongoBatchRequest{
-		JobID:               "process-batch-workflow-local-csv-mongo-server-happy",
-		BatchSize:           200,
-		MaxInProcessBatches: 2,
-		MaxBatches:          6,
+	ssCfg := snapshotters.LocalFileSnapshotterConfig{
+		Path: filePath,
+	}
+
+	req := &LocalCSVSQLLiteBatchRequest{
+		JobID:               "process-batch-workflow-local-csv-sqllite-server-happy",
+		BatchSize:           400,
+		MaxInProcessBatches: 3,
+		MaxBatches:          3,
 		StartAt:             0,
 		Source:              sourceCfg,
 		Sink:                sinkCfg,
+		Snapshotter:         ssCfg,
 		Policies: map[string]domain.RetryPolicySpec{
 			domain.GetFetchActivityName(sourceCfg): {
 				MaximumAttempts:    3,
@@ -563,16 +501,10 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath_Server(t *testing.T) {
 				BackoffCoefficient: 1.5,
 				MaximumInterval:    10 * time.Second,
 				NonRetryableErrorTypes: []string{
-					sinks.ErrMsgMongoSinkNil,
-					sinks.ErrMsgMongoSinkNilClient,
-					sinks.ErrMsgMongoSinkEmptyCollection,
-					sinks.ErrMsgMongoSinkDBProtocolRequired,
-					sinks.ErrMsgMongoSinkDBHostRequired,
-					sinks.ErrMsgMongoSinkDBNameRequired,
-					sinks.ErrMsgMongoSinkDBUserRequired,
-					sinks.ErrMsgMongoSinkDBPwdRequired,
-					mongodb.ErrMsgMongoMissingDBName,
-					mongodb.ErrMsgMongoCollectionNameOrDocEmpty,
+					sinks.ErrMsgSQLLiteSinkNil,
+					sinks.ErrMsgSQLLiteSinkNilClient,
+					sinks.ErrMsgSQLLiteSinkEmptyTable,
+					sinks.ErrMsgSQLLiteSinkDBFileRequired,
 				},
 			},
 		},
@@ -589,26 +521,34 @@ func Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath_Server(t *testing.T) {
 			ID:        "pbwlcmsh-" + time.Now().Format("150405.000"),
 			TaskQueue: tq,
 		},
-		bo.ProcessLocalCSVMongoWorkflowAlias, // workflow function
-		req,                                  // workflow input arg1
+		bo.ProcessLocalCSVSQLLiteWorkflowAlias, // workflow function
+		req,                                    // workflow input arg1
 	)
 	require.NoError(t, err)
 
 	// With a real server, Continue-As-New chains transparently; Get waits for the final run.
-	var out LocalCSVMongoBatchRequest
-	require.NoError(t, run.Get(ctx, &out))
-	require.NotNil(t, out)
-	require.True(t, out.Done, "workflow should be marked as done")
+	var result LocalCSVSQLLiteBatchRequest
+	require.NoError(t, run.Get(ctx, &result))
+	require.NotNil(t, result)
+	require.True(t, result.Done, "workflow should be marked as done")
 
-	l.Debug("Test_ProcessBatchWorkflow_LocalCSV_Mongo_HappyPath_Server - workflow completed successfully",
+	require.EqualValues(t, 11, int(result.Snapshot.NumProcessed))
+	errorCount := 0
+	for _, errs := range result.Snapshot.Errors {
+		errorCount += len(errs)
+	}
+	require.EqualValues(t, 20, int(result.Snapshot.NumRecords))
+	require.EqualValues(t, 0, errorCount)
+
+	l.Debug("Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath_Server - workflow completed successfully",
 		"workflow-id", run.GetID(),
 		"workflow-run-id", run.GetRunID(),
-		"offsets", out.Offsets,
-		"num-batches-processed", len(out.Offsets),
+		"offsets", result.Offsets,
+		"num-batches-processed", len(result.Offsets),
 	)
 }
 
-func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
+func Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
 
@@ -626,7 +566,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 
 	// Register the workflow
 	env.RegisterWorkflowWithOptions(
-		bo.ProcessBatchWorkflow[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow]],
+		bo.ProcessBatchWorkflow[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
 		workflow.RegisterOptions{
 			Name: bo.ProcessLocalCSVSQLLiteWorkflowAlias,
 		},
@@ -643,6 +583,12 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 		bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 		activity.RegisterOptions{
 			Name: bo.WriteNextSQLLiteSinkBatchAlias,
+		},
+	)
+	env.RegisterActivityWithOptions(
+		bo.SnapshotActivity[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
+		activity.RegisterOptions{
+			Name: bo.SnapshotLocalFileAlias,
 		},
 	)
 
@@ -700,13 +646,201 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 		Table:  "agent",
 	}
 
+	filePath, err := utils.BuildFilePath()
+	require.NoError(t, err, "error building csv file path for test")
+	ssCfg := snapshotters.LocalFileSnapshotterConfig{
+		Path: filePath,
+	}
+
 	req := &LocalCSVSQLLiteBatchRequest{
-		JobID:               "job-happy",
+		JobID:               "job-temp-local-csv-sqllite-happy",
+		BatchSize:           200,
+		MaxInProcessBatches: 2,
+		StartAt:             0,
+		Source:              sourceCfg,
+		Sink:                sinkCfg,
+		Snapshotter:         ssCfg,
+		Policies: map[string]domain.RetryPolicySpec{
+			domain.GetFetchActivityName(sourceCfg): {
+				MaximumAttempts:    3,
+				InitialInterval:    100 * time.Millisecond,
+				BackoffCoefficient: 2.0,
+				MaximumInterval:    5 * time.Second,
+				NonRetryableErrorTypes: []string{
+					sources.ErrMsgLocalCSVPathRequired,
+					sources.ErrMsgLocalCSVSizeMustBePositive,
+					sources.ErrMsgLocalCSVFileNotFound,
+					sources.ErrMsgLocalCSVTransformerNil,
+				},
+			},
+			domain.GetWriteActivityName(sinkCfg): {
+				MaximumAttempts:    5,
+				InitialInterval:    200 * time.Millisecond,
+				BackoffCoefficient: 1.5,
+				MaximumInterval:    10 * time.Second,
+				NonRetryableErrorTypes: []string{
+					sinks.ErrMsgSQLLiteSinkNil,
+					sinks.ErrMsgSQLLiteSinkNilClient,
+					sinks.ErrMsgSQLLiteSinkEmptyTable,
+					sinks.ErrMsgSQLLiteSinkDBFileRequired,
+					sqllite.ERR_SQLITE_DB_CONNECTION,
+				},
+			},
+		},
+	}
+
+	env.SetOnActivityStartedListener(
+		func(
+			activityInfo *activity.Info,
+			ctx context.Context,
+			args converter.EncodedValues,
+		) {
+			activityType := activityInfo.ActivityType.Name
+			if strings.HasPrefix(activityType, "internalSession") {
+				return
+			}
+
+			l.Debug(
+				"Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath - Activity started",
+				"activity-type", activityType,
+			)
+
+		})
+
+	defer func() {
+		if err := recover(); err != nil {
+			l.Error(
+				"Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath - panicked",
+				"workflow", bo.ProcessLocalCSVSQLLiteWorkflowAlias,
+				"error", err,
+			)
+		}
+
+		err := env.GetWorkflowError()
+		if err != nil {
+			l.Error(
+				"Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath - error",
+				"error", err.Error(),
+			)
+		} else {
+			var result LocalCSVSQLLiteBatchRequest
+			err := env.GetWorkflowResult(&result)
+			require.NoError(t, err)
+			l.Debug(
+				"Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath - success",
+				"result-offsets", result.Offsets,
+				"num-batches-processed", len(result.Batches),
+			)
+			require.EqualValues(t, 4, uint(result.Snapshot.NumProcessed))
+			errorCount := 0
+			for _, errs := range result.Snapshot.Errors {
+				errorCount += len(errs)
+			}
+			require.EqualValues(t, 13, uint(result.Snapshot.NumRecords))
+			require.EqualValues(t, 0, errorCount)
+		}
+
+	}()
+
+	env.ExecuteWorkflow(bo.ProcessLocalCSVSQLLiteWorkflowAlias, req)
+
+	require.True(t, env.IsWorkflowCompleted())
+
+}
+
+func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+
+	l := logger.GetSlogLogger()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	ctx = logger.WithLogger(ctx, l)
+
+	env.SetWorkerOptions(worker.Options{
+		BackgroundActivityContext: ctx,
+		DeadlockDetectionTimeout:  24 * time.Hour, // set a long timeout to avoid deadlock detection during tests
+	})
+
+	env.SetTestTimeout(24 * time.Hour)
+
+	// Register the workflow
+	env.RegisterWorkflowWithOptions(
+		bo.ProcessBatchWorkflow[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
+		workflow.RegisterOptions{
+			Name: bo.ProcessLocalCSVSQLLiteWorkflowAlias,
+		},
+	)
+
+	// Register activities.
+	env.RegisterActivityWithOptions(
+		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
+		activity.RegisterOptions{
+			Name: bo.FetchNextLocalCSVSourceBatchAlias,
+		},
+	)
+	env.RegisterActivityWithOptions(
+		bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
+		activity.RegisterOptions{
+			Name: bo.WriteNextSQLLiteSinkBatchAlias,
+		},
+	)
+	env.RegisterActivityWithOptions(
+		bo.SnapshotActivity[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
+		activity.RegisterOptions{
+			Name: bo.SnapshotLocalFileAlias,
+		},
+	)
+
+	// Build source & sink configurations
+	// Source - local CSV
+	fileName := utils.BuildFileName()
+	filePath, err := utils.BuildFilePath()
+	require.NoError(t, err, "error building csv file path for test")
+	path := filepath.Join(filePath, fileName)
+	sourceCfg := sources.LocalCSVConfig{
+		Path:         path,
+		Delimiter:    '|',
+		HasHeader:    true,
+		MappingRules: domain.BuildBusinessModelTransformRules(),
+	}
+
+	// Sink - MongoDB
+	dbFile := "data/__deleteme.db"
+	dbClient, err := sqllite.NewSQLLiteDBClient(dbFile)
+	require.NoError(t, err)
+
+	defer func(cl *sqllite.SQLLiteDBClient, fpath string) {
+		ags, err := cl.FetchRecords(context.Background(), "agent", 0, 25)
+		require.NoError(t, err)
+		require.Equal(t, len(ags), 20)
+
+		require.NoError(t, cl.Close(ctx), "close db client")
+		require.NoError(t, os.Remove(fpath), "cleanup temp db file")
+	}(dbClient, dbFile)
+
+	res := dbClient.ExecuteSchema(sqllite.AgentSchema)
+	n, err := res.LastInsertId()
+	require.NoError(t, err)
+	require.Equal(t, int64(0), n)
+
+	sinkCfg := sinks.SQLLiteSinkConfig[domain.CSVRow]{
+		DBFile: dbFile,
+		Table:  "agent",
+	}
+
+	ssCfg := snapshotters.LocalFileSnapshotterConfig{
+		Path: filePath,
+	}
+
+	req := &LocalCSVSQLLiteBatchRequest{
+		JobID:               "job-local-csv-sqllite-happy",
 		BatchSize:           400,
 		MaxInProcessBatches: 2,
 		StartAt:             0,
 		Source:              sourceCfg,
 		Sink:                sinkCfg,
+		Snapshotter:         ssCfg,
 		Policies: map[string]domain.RetryPolicySpec{
 			domain.GetFetchActivityName(sourceCfg): {
 				MaximumAttempts:    3,
@@ -778,19 +912,12 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 				"result-offsets", result.Offsets,
 				"num-batches-processed", len(result.Batches),
 			)
-			require.EqualValues(t, 3, len(result.Offsets))
-			require.EqualValues(t, 2, len(result.Batches))
-			recordCount := 0
+			require.EqualValues(t, 11, uint(result.Snapshot.NumProcessed))
 			errorCount := 0
-			for _, batch := range result.Batches {
-				recordCount += len(batch.Records)
-				for _, rec := range batch.Records {
-					if rec.BatchResult.Error != "" {
-						errorCount++
-					}
-				}
+			for _, errs := range result.Snapshot.Errors {
+				errorCount += len(errs)
 			}
-			require.EqualValues(t, 13, recordCount)
+			require.EqualValues(t, 20, uint(result.Snapshot.NumRecords))
 			require.EqualValues(t, 0, errorCount)
 		}
 
@@ -822,7 +949,7 @@ func Test_ProcessBatchWorkflow_Err_NonRetryable(t *testing.T) {
 
 	// Register the workflow
 	env.RegisterWorkflowWithOptions(
-		bo.ProcessBatchWorkflow[domain.CSVRow, *fakeSrcConfig, *fakeSinkConfig[domain.CSVRow]],
+		bo.ProcessBatchWorkflow[domain.CSVRow, *fakeSrcConfig, *fakeSinkConfig[domain.CSVRow], *snapshotters.LocalFileSnapshotterConfig],
 		workflow.RegisterOptions{
 			Name: ProcessFakeSrcSinkWorkflowAlias,
 		},
@@ -933,7 +1060,7 @@ func Test_ProcessBatchWorkflow_Err_Retryable(t *testing.T) {
 
 	// Register the workflow
 	env.RegisterWorkflowWithOptions(
-		bo.ProcessBatchWorkflow[domain.CSVRow, *fakeSrcConfig, *fakeSinkConfig[domain.CSVRow]],
+		bo.ProcessBatchWorkflow[domain.CSVRow, *fakeSrcConfig, *fakeSinkConfig[domain.CSVRow], *snapshotters.LocalFileSnapshotterConfig],
 		workflow.RegisterOptions{
 			Name: ProcessFakeSrcSinkWorkflowAlias,
 		},
@@ -1051,7 +1178,7 @@ const ProcessFakeSrcSinkWorkflowAlias string = "process-Fake-src-sink-workflow-a
 const FetchNextFakeSourceBatchAlias string = "fetch-next-" + FakeSource + "-batch-alias"
 const WriteNextFakeSinkBatchAlias string = "write-next-" + FakeSink + "-batch-alias"
 
-type FakeSourceSinkBatchRequest domain.BatchProcessingRequest[domain.CSVRow, *fakeSrcConfig, *fakeSinkConfig[domain.CSVRow]]
+type FakeSourceSinkBatchRequest domain.BatchProcessingRequest[domain.CSVRow, *fakeSrcConfig, *fakeSinkConfig[domain.CSVRow], *snapshotters.LocalFileSnapshotterConfig]
 
 type fakeSrcConfig struct {
 	calls int

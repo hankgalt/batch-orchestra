@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/hankgalt/batch-orchestra/internal/clients/mongodb"
 	"github.com/hankgalt/batch-orchestra/pkg/domain"
 )
 
@@ -38,23 +37,6 @@ func BuildFilePath() (string, error) {
 	}
 
 	return filePath, nil
-}
-
-func BuildMongoStoreConfig() mongodb.MongoConfig {
-	dbProtocol := os.Getenv("MONGO_PROTOCOL")
-	dbHost := os.Getenv("MONGO_HOSTNAME")
-	dbUser := os.Getenv("MONGO_USERNAME")
-	dbPwd := os.Getenv("MONGO_PASSWORD")
-	dbParams := os.Getenv("MONGO_CONN_PARAMS")
-	dbName := os.Getenv("MONGO_DBNAME")
-	return mongodb.MongoConfig{
-		Protocol: dbProtocol,
-		Host:     dbHost,
-		User:     dbUser,
-		Pwd:      dbPwd,
-		Params:   dbParams,
-		DBName:   dbName,
-	}
 }
 
 func BuildCloudFileConfig() (domain.CloudFileConfig, error) {

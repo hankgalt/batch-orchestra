@@ -2,7 +2,6 @@ package domain
 
 import (
 	"context"
-	"maps"
 	"time"
 )
 
@@ -64,6 +63,17 @@ type Sink[T any] interface {
 	Close(context.Context) error
 }
 
+type SnapshotConfig interface {
+	BuildSnapshotter(ctx context.Context) (Snapshotter, error)
+	Name() string
+}
+
+type Snapshotter interface {
+	Snapshot(ctx context.Context, key string, snapshot any) error
+	Close(context.Context) error
+	Name() string
+}
+
 // WriteStreamer[T any] is an interface for streaming writes of batches of T.
 type WriteStreamer[T any] interface {
 	WriteStream(ctx context.Context, start uint64, data []T) (<-chan BatchResult, error)
@@ -92,8 +102,9 @@ type FetchOutput[T any] struct {
 	Batch *BatchProcess[T]
 }
 
-// BatchProcessingRequest[T any, S SourceConfig[T], D SinkConfig[T]] is a request to process a batch of T from a source S and write to a sink D.
-type BatchProcessingRequest[T any, S SourceConfig[T], D SinkConfig[T]] struct {
+// BatchProcessingRequest[T any, S SourceConfig[T], D SinkConfig[T]]
+// is a request to process a batch of T from a source S and write to a sink D.
+type BatchProcessingRequest[T any, S SourceConfig[T], D SinkConfig[T], SS SnapshotConfig] struct {
 	MaxInProcessBatches uint                        // maximum number of batches to process
 	BatchSize           uint                        // maximum size of each batch
 	MaxBatches          uint                        // max number of batches to processed be waorkflow (continue as new limit)
@@ -101,10 +112,12 @@ type BatchProcessingRequest[T any, S SourceConfig[T], D SinkConfig[T]] struct {
 	StartAt             uint64                      // initial offset
 	Source              S                           // source configuration
 	Sink                D                           // sink configuration
+	Snapshotter         SS                          // snapshotter configuration
 	Done                bool                        // whether the job is done
 	Offsets             []uint64                    // list of offsets for each batch
 	Batches             map[string]*BatchProcess[T] // map of batch by ID
 	Policies            map[string]RetryPolicySpec  // map of retry policies for batch activities by activity alias
+	Snapshot            *BatchSnapshot              // Processed snapshot
 }
 
 type Rule struct {
@@ -131,26 +144,24 @@ type RetryPolicySpec struct {
 	NonRetryableErrorTypes []string
 }
 
-func BuildContinueAsNewWorkflowRequest[T any, S SourceConfig[T], D SinkConfig[T]](
-	src *BatchProcessingRequest[T, S, D],
-	startAt uint64,
-) *BatchProcessingRequest[T, S, D] {
-	// Clone request for new workflow
-	newReq := &BatchProcessingRequest[T, S, D]{
-		MaxInProcessBatches: src.MaxInProcessBatches,
-		BatchSize:           src.BatchSize,
-		MaxBatches:          src.MaxBatches,
-		JobID:               src.JobID,
-		Source:              src.Source,
-		Sink:                src.Sink,
-		Done:                src.Done,
-	}
-	// Clone Policies map
-	if src.Policies != nil {
-		newReq.Policies = make(map[string]RetryPolicySpec, len(src.Policies))
-		maps.Copy(newReq.Policies, src.Policies)
-	}
+// BatchProcessingResult[T any]
+// is a result snapshot a batch of T
+type BatchProcessingResult[T any] struct {
+	JobID   string                      // unique identifier for the job
+	StartAt uint64                      // initial offset
+	Done    bool                        // whether the job is done
+	Offsets []uint64                    // list of offsets for each batch
+	Batches map[string]*BatchProcess[T] // map of batch by ID
+}
 
-	newReq.StartAt = startAt
-	return newReq
+type ErrorRecord struct {
+	Start, End uint64
+	Error      string
+}
+
+type BatchSnapshot struct {
+	Done         bool
+	NumProcessed uint                     // number of batches processed
+	NumRecords   uint                     // number of records processed
+	Errors       map[string][]ErrorRecord // map of batch ID to list of error records
 }

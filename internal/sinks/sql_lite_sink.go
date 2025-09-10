@@ -3,6 +3,7 @@ package sinks
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -124,4 +125,33 @@ func (c SQLLiteSinkConfig[T]) BuildSink(ctx context.Context) (domain.Sink[T], er
 		client: dbClient,
 		table:  c.Table,
 	}, nil
+}
+
+// toMapAny converts common row shapes to map[string]any.
+//   - map[string]any: pass-through
+//   - map[string]string: widen to any
+//   - everything else: JSON round-trip into map[string]any
+func toMapAny[T any](rec T) (map[string]any, error) {
+	// Fast paths
+	if m, ok := any(rec).(map[string]any); ok {
+		return m, nil
+	}
+	if ms, ok := any(rec).(map[string]string); ok {
+		out := make(map[string]any, len(ms))
+		for k, v := range ms {
+			out[k] = v
+		}
+		return out, nil
+	}
+
+	// Fallback: JSON round-trip (covers structs, slices, etc.)
+	b, err := json.Marshal(rec)
+	if err != nil {
+		return nil, fmt.Errorf("marshal: %w", err)
+	}
+	var out map[string]any
+	if err := json.Unmarshal(b, &out); err != nil {
+		return nil, fmt.Errorf("unmarshal: %w", err)
+	}
+	return out, nil
 }

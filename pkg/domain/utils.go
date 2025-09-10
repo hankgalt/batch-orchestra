@@ -14,6 +14,10 @@ func GetWriteActivityName[T any](sink SinkConfig[T]) string {
 	return "write-next-" + sink.Name() + "-batch-alias"
 }
 
+func GetSnapshotActivityName(snapshotter SnapshotConfig) string {
+	return "snapshot-" + snapshotter.Name() + "-alias"
+}
+
 func GetBatchId(start, end uint64, prefix, suffix string) string {
 	if prefix == "" && suffix == "" {
 		return fmt.Sprintf("batch-%d-%d", start, end)

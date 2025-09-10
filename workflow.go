@@ -13,9 +13,8 @@ import (
 )
 
 const (
-	ProcessLocalCSVMongoWorkflowAlias   string = "process-local-csv-mongo-workflow-alias"
-	ProcessCloudCSVMongoWorkflowAlias   string = "process-cloud-csv-mongo-workflow-alias"
 	ProcessLocalCSVSQLLiteWorkflowAlias string = "process-local-csv-sqlite-workflow-alias"
+	ProcessCloudCSVSQLLiteWorkflowAlias string = "process-cloud-csv-sqlite-workflow-alias"
 )
 
 const (
@@ -32,10 +31,10 @@ const WorkflowBatchLimit = uint(100)
 const MinimumInProcessBatches = uint(2)
 
 // ProcessBatchWorkflow processes a batch of records from a source to a sink.
-func ProcessBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T]](
+func ProcessBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T], SS domain.SnapshotConfig](
 	ctx workflow.Context,
-	req *domain.BatchProcessingRequest[T, S, D],
-) (*domain.BatchProcessingRequest[T, S, D], error) {
+	req *domain.BatchProcessingRequest[T, S, D, SS],
+) (*domain.BatchProcessingRequest[T, S, D, SS], error) {
 	l := workflow.GetLogger(ctx)
 
 	wkflname := workflow.GetInfo(ctx).WorkflowType.Name
@@ -82,17 +81,17 @@ func ProcessBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 }
 
 // ProcessBatchWorkflow processes a batch of records from a source to a sink.
-func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T]](
+func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T], SS domain.SnapshotConfig](
 	ctx workflow.Context,
-	req *domain.BatchProcessingRequest[T, S, D],
-) (*domain.BatchProcessingRequest[T, S, D], error) {
+	req *domain.BatchProcessingRequest[T, S, D, SS],
+) (*domain.BatchProcessingRequest[T, S, D, SS], error) {
 	l := workflow.GetLogger(ctx)
 
 	// Get the workflow name
 	wkflname := workflow.GetInfo(ctx).WorkflowType.Name
 
 	// setup query handler for query type "state"
-	if err := workflow.SetQueryHandler(ctx, "state", func(input []byte) (*domain.BatchProcessingRequest[T, S, D], error) {
+	if err := workflow.SetQueryHandler(ctx, "state", func(input []byte) (*domain.BatchProcessingRequest[T, S, D, SS], error) {
 		return req, nil
 	}); err != nil {
 		l.Error(
@@ -131,6 +130,7 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	// Get the fetch and write activity aliases based on the source and sink
 	fetchActivityAlias := domain.GetFetchActivityName(req.Source)
 	writeActivityAlias := domain.GetWriteActivityName(req.Sink)
+	snapshotActivityAlias := domain.GetSnapshotActivityName(req.Snapshotter)
 
 	// setup activity options
 	fetchAO, writeAO := buildFetchAndWriteActivityOptions(req)
@@ -240,6 +240,26 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		}
 	}
 
+	// Execute snapshot activity
+	var sShot domain.BatchSnapshot
+	if err := workflow.ExecuteActivity(fetchCtx, snapshotActivityAlias, req).Get(ctx, &sShot); err != nil {
+		l.Error(
+			"processBatchWorkflow snapshot activity failed",
+			"snapshotter", req.Snapshotter.Name(),
+			"source", req.Source.Name(),
+			"sink", req.Sink.Name(),
+			"start-at", req.StartAt,
+			"workflow", wkflname,
+			"snapshot-activity", snapshotActivityAlias,
+			"error", err.Error(),
+		)
+		// If snapshot was not taken successfully, build it manually & update the request
+		req.Snapshot = buildRequestSnapshot(req)
+	} else {
+		// If snapshot was taken successfully, update the request
+		req.Snapshot = &sShot
+	}
+
 	if !req.Done && batchCount >= req.MaxBatches {
 		// continue as new
 		startAt := req.Offsets[len(req.Offsets)-1]
@@ -255,13 +275,12 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 			"write-activity", writeActivityAlias,
 		)
 
-		// update request start at
-		req.StartAt = startAt
-		return nil, workflow.NewContinueAsNewError(ctx, wkflname, req)
-
-		// build new workflow request
-		// newReq := domain.BuildContinueAsNewWorkflowRequest(req, startAt)
-		// return req, workflow.NewContinueAsNewError(ctx, wkflname, newReq)
+		// value copy of the struct (shallow)
+		next := req
+		next.StartAt = startAt
+		next.Batches = nil
+		next.Offsets = nil
+		return nil, workflow.NewContinueAsNewError(ctx, wkflname, next)
 	}
 
 	l.Debug(
@@ -273,11 +292,13 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		"write-activity", writeActivityAlias,
 		"batch-count", batchCount,
 	)
+	req.Batches = nil
+	req.Offsets = nil
 	return req, nil
 }
 
-func buildFetchAndWriteActivityOptions[T any, S domain.SourceConfig[T], D domain.SinkConfig[T]](
-	req *domain.BatchProcessingRequest[T, S, D],
+func buildFetchAndWriteActivityOptions[T any, S domain.SourceConfig[T], D domain.SinkConfig[T], SS domain.SnapshotConfig](
+	req *domain.BatchProcessingRequest[T, S, D, SS],
 ) (workflow.ActivityOptions, workflow.ActivityOptions) {
 	// setup activity options
 	ao := workflow.ActivityOptions{

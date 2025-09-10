@@ -294,76 +294,6 @@ func Test_Write_NoopSink(t *testing.T) {
 	require.Equal(t, 2, len(out.Batch.Records))
 }
 
-// setup mongo cluster & mongo env vars in test env, before running this test
-func Test_Write_MongoSink(t *testing.T) {
-	var suite testsuite.WorkflowTestSuite
-	env := suite.NewTestActivityEnvironment()
-
-	l := logger.GetSlogLogger()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-	defer cancel()
-	ctx = logger.WithLogger(ctx, l)
-
-	env.SetWorkerOptions(worker.Options{
-		BackgroundActivityContext: ctx,
-		DeadlockDetectionTimeout:  24 * time.Hour, // set a long timeout to avoid deadlock detection during tests
-	})
-
-	env.SetTestTimeout(24 * time.Hour)
-
-	env.RegisterActivityWithOptions(
-		bo.WriteActivity[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]],
-		activity.RegisterOptions{
-			Name: bo.WriteNextMongoSinkBatchAlias,
-		},
-	)
-
-	recs := []*domain.BatchRecord[domain.CSVRow]{
-		{
-			Start: 0,
-			End:   10,
-			Data:  domain.CSVRow{"id": "1", "name": "alpha"},
-		},
-		{
-			Start: 10,
-			End:   20,
-			Data:  domain.CSVRow{"id": "2", "name": "beta"},
-		},
-	}
-
-	b := &domain.BatchProcess[domain.CSVRow]{
-		Records:    recs,
-		NextOffset: 30,
-		Done:       false,
-	}
-
-	nmCfg := utils.BuildMongoStoreConfig()
-	require.NotEmpty(t, nmCfg.DBName, "MongoDB name should not be empty")
-	require.NotEmpty(t, nmCfg.Host, "MongoDB host should not be empty")
-
-	cfg := sinks.MongoSinkConfig[domain.CSVRow]{
-		Protocol:   nmCfg.Protocol,
-		Host:       nmCfg.Host,
-		DBName:     nmCfg.DBName,
-		User:       nmCfg.User,
-		Pwd:        nmCfg.Pwd,
-		Params:     nmCfg.Params,
-		Collection: "test.people",
-	}
-
-	in := &domain.WriteInput[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]]{
-		Sink:  cfg,
-		Batch: b,
-	}
-
-	val, err := env.ExecuteActivity(bo.WriteNextMongoSinkBatchAlias, in)
-	require.NoError(t, err)
-
-	var out domain.WriteOutput[domain.CSVRow]
-	require.NoError(t, val.Get(&out))
-	require.Equal(t, 2, len(out.Batch.Records))
-}
-
 func Test_Write_SQLLiteSink(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestActivityEnvironment()
@@ -452,9 +382,7 @@ func Test_Write_SQLLiteSink(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// add a local csv file to data directiory, setup mongo cluster & mongo env vars
-// in test environment, before running this test
-func Test_FetchAndWrite_LocalCSVSource_MongoSink_Queue(t *testing.T) {
+func Test_FetchAndWrite_LocalTempCSVSource_SQLLiteSink_Queue(t *testing.T) {
 	// setup test environment
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestActivityEnvironment()
@@ -480,9 +408,9 @@ func Test_FetchAndWrite_LocalCSVSource_MongoSink_Queue(t *testing.T) {
 		},
 	)
 	env.RegisterActivityWithOptions(
-		bo.WriteActivity[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]],
+		bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 		activity.RegisterOptions{
-			Name: bo.WriteNextMongoSinkBatchAlias,
+			Name: bo.WriteNextSQLLiteSinkBatchAlias,
 		},
 	)
 
@@ -490,8 +418,10 @@ func Test_FetchAndWrite_LocalCSVSource_MongoSink_Queue(t *testing.T) {
 	// Source - local CSV
 	fileName := utils.BuildFileName()
 	filePath, err := utils.BuildFilePath()
-	require.NoError(t, err, "error building csv file path for test")
+	require.NoError(t, err, "error building file path for test CSV")
+
 	path := filepath.Join(filePath, fileName)
+
 	sourceCfg := sources.LocalCSVConfig{
 		Path:         path,
 		Delimiter:    '|',
@@ -499,18 +429,28 @@ func Test_FetchAndWrite_LocalCSVSource_MongoSink_Queue(t *testing.T) {
 		MappingRules: domain.BuildBusinessModelTransformRules(),
 	}
 
-	// Sink - MongoDB
-	mCfg := utils.BuildMongoStoreConfig()
-	require.NotEmpty(t, mCfg.DBName, "MongoDB name should not be empty")
-	require.NotEmpty(t, mCfg.Host, "MongoDB host should not be empty")
-	sinkCfg := sinks.MongoSinkConfig[domain.CSVRow]{
-		Protocol:   mCfg.Protocol,
-		Host:       mCfg.Host,
-		DBName:     mCfg.DBName,
-		User:       mCfg.User,
-		Pwd:        mCfg.Pwd,
-		Params:     mCfg.Params,
-		Collection: "vypar.agents",
+	// Sink - SQL-Lite
+	dbFile := "data/__deleteme.db"
+	dbClient, err := sqllite.NewSQLLiteDBClient(dbFile)
+	require.NoError(t, err)
+
+	defer func(cl *sqllite.SQLLiteDBClient, fpath string) {
+		ags, err := cl.FetchRecords(context.Background(), "agent", 0, 15)
+		require.NoError(t, err)
+		require.Equal(t, len(ags), 13)
+
+		require.NoError(t, cl.Close(ctx), "close db client")
+		require.NoError(t, os.Remove(fpath), "cleanup temp db file")
+	}(dbClient, dbFile)
+
+	res := dbClient.ExecuteSchema(sqllite.AgentSchema)
+	n, err := res.LastInsertId()
+	require.NoError(t, err)
+	require.Equal(t, int64(0), n)
+
+	sinkCfg := sinks.SQLLiteSinkConfig[domain.CSVRow]{
+		DBFile: dbFile,
+		Table:  "agent",
 	}
 
 	// Build ETL request
@@ -548,13 +488,13 @@ func Test_FetchAndWrite_LocalCSVSource_MongoSink_Queue(t *testing.T) {
 	etlReq.Done = fOut.Batch.Done
 
 	// setup first write request
-	wIn := &domain.WriteInput[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]]{
+	wIn := &domain.WriteInput[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]]{
 		Sink:  sinkCfg,
 		Batch: fOut.Batch,
 	}
 
 	// Execute async the write activity for first batch
-	wVal, err := env.ExecuteActivity(bo.WriteNextMongoSinkBatchAlias, wIn)
+	wVal, err := env.ExecuteActivity(bo.WriteNextSQLLiteSinkBatchAlias, wIn)
 	require.NoError(t, err)
 
 	// Push the write activity future to the queue
@@ -582,12 +522,12 @@ func Test_FetchAndWrite_LocalCSVSource_MongoSink_Queue(t *testing.T) {
 			etlReq.Offsets = append(etlReq.Offsets, fOut.Batch.NextOffset)
 			etlReq.Batches[fmt.Sprintf("batch-%d-%d", fOut.Batch.StartOffset, fOut.Batch.NextOffset)] = fOut.Batch
 
-			wIn = &domain.WriteInput[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]]{
+			wIn = &domain.WriteInput[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]]{
 				Sink:  sinkCfg,
 				Batch: fOut.Batch,
 			}
 
-			wVal, err := env.ExecuteActivity(bo.WriteNextMongoSinkBatchAlias, wIn)
+			wVal, err := env.ExecuteActivity(bo.WriteNextSQLLiteSinkBatchAlias, wIn)
 			require.NoError(t, err)
 
 			q.PushBack(wVal)
@@ -613,164 +553,11 @@ func Test_FetchAndWrite_LocalCSVSource_MongoSink_Queue(t *testing.T) {
 		}
 	}
 
+	l.Debug("ETL request done.", "offsets", etlReq.Offsets, "num-batches", len(etlReq.Batches))
 	require.Equal(t, true, len(etlReq.Offsets) > 0)
 }
 
-// setup mongo cluster, cloud env vars & mongo env vars in test environment,
-// before running this test
-func Test_FetchAndWrite_CloudCSVSource_MongoSink_Queue(t *testing.T) {
-	var suite testsuite.WorkflowTestSuite
-	env := suite.NewTestActivityEnvironment()
-
-	l := logger.GetSlogLogger()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
-	ctx = logger.WithLogger(ctx, l)
-
-	env.SetWorkerOptions(worker.Options{
-		BackgroundActivityContext: ctx,
-		DeadlockDetectionTimeout:  24 * time.Hour, // set a long timeout to avoid deadlock detection during tests
-	})
-	env.SetTestTimeout(24 * time.Hour)
-
-	// Register concrete generic instantiations used by the test.
-	env.RegisterActivityWithOptions(
-		bo.FetchNextActivity[domain.CSVRow, sources.CloudCSVConfig],
-		activity.RegisterOptions{
-			Name: bo.FetchNextCloudCSVSourceBatchAlias,
-		},
-	)
-	env.RegisterActivityWithOptions(
-		bo.WriteActivity[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]],
-		activity.RegisterOptions{
-			Name: bo.WriteNextMongoSinkBatchAlias,
-		},
-	)
-
-	envCfg, err := utils.BuildCloudFileConfig()
-	require.NoError(t, err, "error building cloud CSV config for test environment")
-
-	path := filepath.Join(envCfg.Path, envCfg.Name)
-
-	sourceCfg := sources.CloudCSVConfig{
-		Path:         path,
-		Bucket:       envCfg.Bucket,
-		Provider:     string(sources.CloudSourceGCS),
-		Delimiter:    '|',
-		HasHeader:    true,
-		MappingRules: domain.BuildBusinessModelTransformRules(),
-	}
-
-	mCfg := utils.BuildMongoStoreConfig()
-	require.NotEmpty(t, mCfg.DBName, "MongoDB name should not be empty")
-	require.NotEmpty(t, mCfg.Host, "MongoDB host should not be empty")
-
-	sinkCfg := sinks.MongoSinkConfig[domain.CSVRow]{
-		Protocol:   mCfg.Protocol,
-		Host:       mCfg.Host,
-		DBName:     mCfg.DBName,
-		User:       mCfg.User,
-		Pwd:        mCfg.Pwd,
-		Params:     mCfg.Params,
-		Collection: "vypar.agents",
-	}
-
-	// batchSize should be larger than the largest row size in bytes
-	etlReq := &ETLRequest[domain.CSVRow]{
-		MaxBatches: 2,
-		BatchSize:  400,
-		Done:       false,
-		Offsets:    []uint64{},
-		Batches:    map[string]*domain.BatchProcess[domain.CSVRow]{},
-	}
-
-	etlReq.Offsets = append(etlReq.Offsets, uint64(0))
-
-	// initiate a new queue
-	q := list.New()
-
-	fIn := &domain.FetchInput[domain.CSVRow, sources.CloudCSVConfig]{
-		Source:    sourceCfg,
-		Offset:    etlReq.Offsets[len(etlReq.Offsets)-1],
-		BatchSize: etlReq.BatchSize,
-	}
-
-	fVal, err := env.ExecuteActivity(bo.FetchNextCloudCSVSourceBatchAlias, fIn)
-	require.NoError(t, err)
-
-	var fOut domain.FetchOutput[domain.CSVRow]
-	require.NoError(t, fVal.Get(&fOut))
-	require.Equal(t, true, len(fOut.Batch.Records) > 0)
-
-	// Store the fetched batch in ETL request
-	etlReq.Offsets = append(etlReq.Offsets, fOut.Batch.NextOffset)
-	etlReq.Done = fOut.Batch.Done
-
-	wIn := &domain.WriteInput[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]]{
-		Sink:  sinkCfg,
-		Batch: fOut.Batch,
-	}
-
-	wVal, err := env.ExecuteActivity(bo.WriteNextMongoSinkBatchAlias, wIn)
-	require.NoError(t, err)
-
-	q.PushBack(wVal)
-
-	count := 0
-	// while there are items in queue
-	for q.Len() > 0 {
-		if q.Len() < int(etlReq.MaxBatches) && !etlReq.Done {
-			fIn = &domain.FetchInput[domain.CSVRow, sources.CloudCSVConfig]{
-				Source:    sourceCfg,
-				Offset:    etlReq.Offsets[len(etlReq.Offsets)-1],
-				BatchSize: etlReq.BatchSize,
-			}
-
-			fVal, err := env.ExecuteActivity(bo.FetchNextCloudCSVSourceBatchAlias, fIn)
-			require.NoError(t, err)
-
-			var fOut domain.FetchOutput[domain.CSVRow]
-			require.NoError(t, fVal.Get(&fOut))
-			require.Equal(t, true, len(fOut.Batch.Records) > 0)
-
-			etlReq.Done = fOut.Batch.Done
-			etlReq.Offsets = append(etlReq.Offsets, fOut.Batch.NextOffset)
-			etlReq.Batches[fmt.Sprintf("batch-%d-%d", fOut.Batch.StartOffset, fOut.Batch.NextOffset)] = fOut.Batch
-
-			wIn = &domain.WriteInput[domain.CSVRow, sinks.MongoSinkConfig[domain.CSVRow]]{
-				Sink:  sinkCfg,
-				Batch: fOut.Batch,
-			}
-
-			wVal, err := env.ExecuteActivity(bo.WriteNextMongoSinkBatchAlias, wIn)
-			require.NoError(t, err)
-
-			q.PushBack(wVal)
-		} else {
-			if count < int(etlReq.MaxBatches) {
-				count++
-			} else {
-				count = 0
-				// Pause execution for 1 second
-				time.Sleep(1 * time.Second)
-			}
-			wVal := q.Remove(q.Front()).(converter.EncodedValue)
-			var wOut domain.WriteOutput[domain.CSVRow]
-			require.NoError(t, wVal.Get(&wOut))
-			require.Equal(t, true, len(wOut.Batch.Records) > 0)
-
-			batchId := fmt.Sprintf("batch-%d-%d", wOut.Batch.StartOffset, wOut.Batch.NextOffset)
-			if _, ok := etlReq.Batches[batchId]; !ok {
-				etlReq.Batches[batchId] = wOut.Batch
-			} else {
-				etlReq.Batches[batchId] = wOut.Batch
-			}
-		}
-	}
-
-}
-
-func Test_FetchAndWrite_LocalTempCSVSource_SQLLiteSink_Queue(t *testing.T) {
+func Test_FetchAndWrite_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 	// setup test environment
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestActivityEnvironment()
