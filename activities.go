@@ -8,23 +8,10 @@ import (
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
 
-	"github.com/hankgalt/batch-orchestra/internal/sinks"
-	"github.com/hankgalt/batch-orchestra/internal/snapshotters"
-	"github.com/hankgalt/batch-orchestra/internal/sources"
 	"github.com/hankgalt/batch-orchestra/pkg/domain"
 )
 
 type ActivityAlias string
-
-// Source/Sink tied activity aliases for registration and lookup. These aliases
-// are needed to identify the activities for generic implementation.
-const (
-	FetchNextLocalCSVSourceBatchAlias string = "fetch-next-" + sources.LocalCSVSource + "-batch-alias"
-	FetchNextCloudCSVSourceBatchAlias string = "fetch-next-" + sources.CloudCSVSource + "-batch-alias"
-	WriteNextNoopSinkBatchAlias       string = "write-next-" + sinks.NoopSink + "-batch-alias"
-	WriteNextSQLLiteSinkBatchAlias    string = "write-next-" + sinks.SQLLiteSink + "-batch-alias"
-	SnapshotLocalFileAlias            string = "snapshot-" + snapshotters.LocalFileSnapshotter + "-alias"
-)
 
 // FetchNextActivity fetches the next batch of data from the source.
 // It builds the source from the provided configuration, fetches the next batch,
@@ -123,7 +110,7 @@ func SnapshotActivity[T any, S domain.SourceConfig[T], D domain.SinkConfig[T], S
 	snapshot := buildRequestSnapshot(req)
 
 	// Build batch result summary
-	batchResult := &domain.BatchProcessingResult[T]{
+	batchResult := &domain.BatchProcessingResult{
 		JobID:   req.JobID,
 		StartAt: req.StartAt,
 		Done:    req.Done,

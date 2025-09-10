@@ -13,11 +13,6 @@ import (
 )
 
 const (
-	ProcessLocalCSVSQLLiteWorkflowAlias string = "process-local-csv-sqlite-workflow-alias"
-	ProcessCloudCSVSQLLiteWorkflowAlias string = "process-cloud-csv-sqlite-workflow-alias"
-)
-
-const (
 	FAILED_REMOVE_FUTURE = "failed to remove future from queue"
 	ERR_QUERY_HANDLER    = "error setting query handler"
 )
@@ -107,7 +102,7 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 
 	// setup request state
 	if req.Batches == nil {
-		req.Batches = map[string]*domain.BatchProcess[T]{}
+		req.Batches = map[string]*domain.BatchProcess{}
 	}
 	if req.Offsets == nil {
 		req.Offsets = []uint64{}

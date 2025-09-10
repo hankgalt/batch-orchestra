@@ -20,7 +20,7 @@ func ReadCSVBatch(
 	delimiter rune,
 	hasHeader bool,
 	transFunc domain.TransformerFunc,
-) ([]*domain.BatchRecord[domain.CSVRow], uint64, error) {
+) ([]*domain.BatchRecord, uint64, error) {
 	if len(data) == 0 || numBytesRead == 0 {
 		return nil, uint64(offset), nil
 	}
@@ -49,7 +49,7 @@ func ReadCSVBatch(
 	// Initialize read count and records slice
 	readCount := 0
 
-	records := []*domain.BatchRecord[domain.CSVRow]{}
+	records := []*domain.BatchRecord{}
 
 	// Read records from the CSV reader
 	for {
@@ -68,7 +68,7 @@ func ReadCSVBatch(
 			// Attempt record cleanup if error occurs
 			cleanedStr := utils.CleanRecord(string(data[nextOffset:csvReader.InputOffset()]))
 			if record, err := utils.ReadSingleRecord(cleanedStr); err != nil {
-				records = append(records, &domain.BatchRecord[domain.CSVRow]{
+				records = append(records, &domain.BatchRecord{
 					Start: uint64(nextOffset),
 					End:   uint64(csvReader.InputOffset()),
 					BatchResult: domain.BatchResult{
@@ -117,7 +117,7 @@ func ReadCSVBatch(
 		}
 
 		// Create a BatchRecord for the current csv record
-		br := domain.BatchRecord[domain.CSVRow]{
+		br := domain.BatchRecord{
 			Start: uint64(startIndex),
 			End:   uint64(csvReader.InputOffset()),
 			Data:  row,
@@ -148,7 +148,7 @@ func ReadCSVStream(
 	delimiter rune,
 	hasHeader bool,
 	transFunc domain.TransformerFunc,
-	resStream chan<- *domain.BatchRecord[domain.CSVRow],
+	resStream chan<- *domain.BatchRecord,
 ) error {
 	if len(data) == 0 || numBytesRead == 0 {
 		return nil
@@ -196,7 +196,7 @@ func ReadCSVStream(
 			cleanedStr := utils.CleanRecord(string(data[nextOffset:csvReader.InputOffset()]))
 			record, err := utils.ReadSingleRecord(cleanedStr)
 			if err != nil {
-				resStream <- &domain.BatchRecord[domain.CSVRow]{
+				resStream <- &domain.BatchRecord{
 					Start: uint64(nextOffset),
 					End:   uint64(csvReader.InputOffset()),
 					BatchResult: domain.BatchResult{
@@ -254,7 +254,7 @@ func ReadCSVStream(
 			row[k] = st
 		}
 
-		resStream <- &domain.BatchRecord[domain.CSVRow]{
+		resStream <- &domain.BatchRecord{
 			Start: uint64(startIndex),
 			End:   uint64(csvReader.InputOffset()),
 			Data:  row,

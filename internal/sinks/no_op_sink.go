@@ -40,7 +40,7 @@ func (s *noopSink[T]) WriteStream(ctx context.Context, start uint64, data []T) (
 }
 
 // Write does nothing and returns the count of records as written.
-func (s *noopSink[T]) Write(ctx context.Context, b *domain.BatchProcess[T]) (*domain.BatchProcess[T], error) {
+func (s *noopSink[T]) Write(ctx context.Context, b *domain.BatchProcess) (*domain.BatchProcess, error) {
 	for _, rec := range b.Records {
 		rec.BatchResult.Result = rec.Data // echo the record as result
 	}

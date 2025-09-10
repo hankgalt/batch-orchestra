@@ -94,7 +94,7 @@ func (s *cloudCSVSource) NextStream(
 	ctx context.Context,
 	offset uint64,
 	size uint,
-) (<-chan *domain.BatchRecord[domain.CSVRow], error) {
+) (<-chan *domain.BatchRecord, error) {
 	// If size is 0 or negative, return an empty batch.
 	if size <= 0 {
 		return nil, ErrCloudCSVSizeMustBePositive
@@ -150,9 +150,9 @@ func (s *cloudCSVSource) NextStream(
 		done = true
 	}
 
-	resStream := make(chan *domain.BatchRecord[domain.CSVRow])
+	resStream := make(chan *domain.BatchRecord)
 	if done {
-		resStream <- &domain.BatchRecord[domain.CSVRow]{
+		resStream <- &domain.BatchRecord{
 			Start: offset,
 			End:   offset,
 			Done:  done,
@@ -187,8 +187,8 @@ func (s *cloudCSVSource) Next(
 	ctx context.Context,
 	offset uint64,
 	size uint,
-) (*domain.BatchProcess[domain.CSVRow], error) {
-	bp := &domain.BatchProcess[domain.CSVRow]{
+) (*domain.BatchProcess, error) {
+	bp := &domain.BatchProcess{
 		Records:     nil,
 		NextOffset:  offset,
 		StartOffset: offset,

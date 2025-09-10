@@ -13,17 +13,17 @@ type BatchResult struct {
 	Error  string
 }
 
-type BatchRecord[T any] struct {
-	Data        T
+type BatchRecord struct {
+	Data        any
 	Start, End  uint64
 	BatchResult BatchResult
 	Done        bool
 }
 
-// BatchProcess[T any] is the neutral "batch process" unit.
-type BatchProcess[T any] struct {
+// BatchProcess is the neutral "batch process" unit.
+type BatchProcess struct {
 	BatchId     string
-	Records     []*BatchRecord[T]
+	Records     []*BatchRecord
 	StartOffset uint64 // start offset in the source
 	NextOffset  uint64 // cursor / next-page token / byte offset
 	Error       string
@@ -39,14 +39,14 @@ type SourceConfig[T any] interface {
 // Source[T any] is a source of batches of T, e.g., a CSV file, a database table, etc.
 // Pulls the next batch given an offset; return next offset.
 type Source[T any] interface {
-	Next(ctx context.Context, offset uint64, n uint) (*BatchProcess[T], error)
+	Next(ctx context.Context, offset uint64, n uint) (*BatchProcess, error)
 	Name() string
 	Close(context.Context) error
 }
 
 // NextStreamer[T any] is an interface for streaming the next batch of records.
 type NextStreamer[T any] interface {
-	NextStream(ctx context.Context, offset uint64, n uint) (<-chan *BatchRecord[T], error)
+	NextStream(ctx context.Context, offset uint64, n uint) (<-chan *BatchRecord, error)
 }
 
 // SinkConfig[T any] is a config that *knows how to build* a Sink for a specific T.
@@ -58,7 +58,7 @@ type SinkConfig[T any] interface {
 // Sink[T any] is a sink that writes a batch of T to a destination, e.g., a database, a file, etc.
 // Writes a batch and return side info (e.g., count written, last id).
 type Sink[T any] interface {
-	Write(ctx context.Context, b *BatchProcess[T]) (*BatchProcess[T], error)
+	Write(ctx context.Context, b *BatchProcess) (*BatchProcess, error)
 	Name() string
 	Close(context.Context) error
 }
@@ -82,12 +82,12 @@ type WriteStreamer[T any] interface {
 // WriteInput[T any, D SinkConfig[T]] is the input for the WriteActivity.
 type WriteInput[T any, D SinkConfig[T]] struct {
 	Sink  D
-	Batch *BatchProcess[T]
+	Batch *BatchProcess
 }
 
 // WriteOutput is the output for the WriteActivity.
 type WriteOutput[T any] struct {
-	Batch *BatchProcess[T]
+	Batch *BatchProcess
 }
 
 // FetchInput[T any, S SourceConfig[T]] is the input for the FetchNextActivity.
@@ -99,25 +99,25 @@ type FetchInput[T any, S SourceConfig[T]] struct {
 
 // FetchOutput[T any] is the output for the FetchNextActivity.
 type FetchOutput[T any] struct {
-	Batch *BatchProcess[T]
+	Batch *BatchProcess
 }
 
 // BatchProcessingRequest[T any, S SourceConfig[T], D SinkConfig[T]]
 // is a request to process a batch of T from a source S and write to a sink D.
 type BatchProcessingRequest[T any, S SourceConfig[T], D SinkConfig[T], SS SnapshotConfig] struct {
-	MaxInProcessBatches uint                        // maximum number of batches to process
-	BatchSize           uint                        // maximum size of each batch
-	MaxBatches          uint                        // max number of batches to processed be waorkflow (continue as new limit)
-	JobID               string                      // unique identifier for the job
-	StartAt             uint64                      // initial offset
-	Source              S                           // source configuration
-	Sink                D                           // sink configuration
-	Snapshotter         SS                          // snapshotter configuration
-	Done                bool                        // whether the job is done
-	Offsets             []uint64                    // list of offsets for each batch
-	Batches             map[string]*BatchProcess[T] // map of batch by ID
-	Policies            map[string]RetryPolicySpec  // map of retry policies for batch activities by activity alias
-	Snapshot            *BatchSnapshot              // Processed snapshot
+	MaxInProcessBatches uint                       // maximum number of batches to process
+	BatchSize           uint                       // maximum size of each batch
+	MaxBatches          uint                       // max number of batches to processed be waorkflow (continue as new limit)
+	JobID               string                     // unique identifier for the job
+	StartAt             uint64                     // initial offset
+	Source              S                          // source configuration
+	Sink                D                          // sink configuration
+	Snapshotter         SS                         // snapshotter configuration
+	Done                bool                       // whether the job is done
+	Offsets             []uint64                   // list of offsets for each batch
+	Batches             map[string]*BatchProcess   // map of batch by ID
+	Policies            map[string]RetryPolicySpec // map of retry policies for batch activities by activity alias
+	Snapshot            *BatchSnapshot             // Processed snapshot
 }
 
 type Rule struct {
@@ -144,14 +144,14 @@ type RetryPolicySpec struct {
 	NonRetryableErrorTypes []string
 }
 
-// BatchProcessingResult[T any]
+// BatchProcessingResult
 // is a result snapshot a batch of T
-type BatchProcessingResult[T any] struct {
-	JobID   string                      // unique identifier for the job
-	StartAt uint64                      // initial offset
-	Done    bool                        // whether the job is done
-	Offsets []uint64                    // list of offsets for each batch
-	Batches map[string]*BatchProcess[T] // map of batch by ID
+type BatchProcessingResult struct {
+	JobID   string                   // unique identifier for the job
+	StartAt uint64                   // initial offset
+	Done    bool                     // whether the job is done
+	Offsets []uint64                 // list of offsets for each batch
+	Batches map[string]*BatchProcess // map of batch by ID
 }
 
 type ErrorRecord struct {

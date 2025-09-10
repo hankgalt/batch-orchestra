@@ -30,6 +30,11 @@ import (
 	"github.com/hankgalt/batch-orchestra/pkg/utils"
 )
 
+const (
+	ProcessLocalCSVSQLLiteWorkflowAlias string = "process-local-csv-sqlite-workflow-alias"
+	ProcessCloudCSVSQLLiteWorkflowAlias string = "process-cloud-csv-sqlite-workflow-alias"
+)
+
 type LocalCSVNoopBatchRequest domain.BatchProcessingRequest[domain.CSVRow, sources.LocalCSVConfig, sinks.NoopSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig]
 type CloudCSVSQLLiteBatchRequest domain.BatchProcessingRequest[domain.CSVRow, sources.CloudCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig]
 type LocalCSVSQLLiteBatchRequest domain.BatchProcessingRequest[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig]
@@ -81,7 +86,7 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_SQLLi
 		s.env.RegisterWorkflowWithOptions(
 			bo.ProcessBatchWorkflow[domain.CSVRow, sources.CloudCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
 			workflow.RegisterOptions{
-				Name: bo.ProcessCloudCSVSQLLiteWorkflowAlias,
+				Name: ProcessCloudCSVSQLLiteWorkflowAlias,
 			},
 		)
 
@@ -89,19 +94,19 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_SQLLi
 		s.env.RegisterActivityWithOptions(
 			bo.FetchNextActivity[domain.CSVRow, sources.CloudCSVConfig],
 			activity.RegisterOptions{
-				Name: bo.FetchNextCloudCSVSourceBatchAlias,
+				Name: FetchNextCloudCSVSourceBatchAlias,
 			},
 		)
 		s.env.RegisterActivityWithOptions(
 			bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 			activity.RegisterOptions{
-				Name: bo.WriteNextSQLLiteSinkBatchAlias,
+				Name: WriteNextSQLLiteSinkBatchAlias,
 			},
 		)
 		s.env.RegisterActivityWithOptions(
 			bo.SnapshotActivity[domain.CSVRow, sources.CloudCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
 			activity.RegisterOptions{
-				Name: bo.SnapshotLocalFileAlias,
+				Name: SnapshotLocalFileAlias,
 			},
 		)
 
@@ -181,7 +186,7 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_SQLLi
 			if err := recover(); err != nil {
 				l.Error(
 					"Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - panicked",
-					"workflow", bo.ProcessCloudCSVSQLLiteWorkflowAlias, "error", err,
+					"workflow", ProcessCloudCSVSQLLiteWorkflowAlias, "error", err,
 				)
 			}
 
@@ -189,7 +194,7 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_SQLLi
 			if err != nil {
 				l.Error(
 					"Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - error",
-					"workflow", bo.ProcessCloudCSVSQLLiteWorkflowAlias, "error", err,
+					"workflow", ProcessCloudCSVSQLLiteWorkflowAlias, "error", err,
 				)
 			} else {
 				var result CloudCSVSQLLiteBatchRequest
@@ -197,7 +202,7 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_SQLLi
 				if err != nil {
 					l.Error(
 						"Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - error",
-						"workflow", bo.ProcessCloudCSVSQLLiteWorkflowAlias, "error", err,
+						"workflow", ProcessCloudCSVSQLLiteWorkflowAlias, "error", err,
 					)
 				} else {
 					l.Debug(
@@ -219,7 +224,7 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_SQLLi
 		}()
 
 		l.Debug("Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - Starting workflow test")
-		s.env.ExecuteWorkflow(bo.ProcessCloudCSVSQLLiteWorkflowAlias, req)
+		s.env.ExecuteWorkflow(ProcessCloudCSVSQLLiteWorkflowAlias, req)
 		s.True(s.env.IsWorkflowCompleted())
 		l.Debug("Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - test completed")
 	})
@@ -246,7 +251,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError(t *testing.T)
 	env.RegisterWorkflowWithOptions(
 		bo.ProcessBatchWorkflow[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
 		workflow.RegisterOptions{
-			Name: bo.ProcessLocalCSVSQLLiteWorkflowAlias,
+			Name: ProcessLocalCSVSQLLiteWorkflowAlias,
 		},
 	)
 
@@ -254,19 +259,19 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError(t *testing.T)
 	env.RegisterActivityWithOptions(
 		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
 		activity.RegisterOptions{
-			Name: bo.FetchNextLocalCSVSourceBatchAlias,
+			Name: FetchNextLocalCSVSourceBatchAlias,
 		},
 	)
 	env.RegisterActivityWithOptions(
 		bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 		activity.RegisterOptions{
-			Name: bo.WriteNextSQLLiteSinkBatchAlias,
+			Name: WriteNextSQLLiteSinkBatchAlias,
 		},
 	)
 	env.RegisterActivityWithOptions(
 		bo.SnapshotActivity[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
 		activity.RegisterOptions{
-			Name: bo.SnapshotLocalFileAlias,
+			Name: SnapshotLocalFileAlias,
 		},
 	)
 
@@ -344,7 +349,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError(t *testing.T)
 		if err := recover(); err != nil {
 			l.Error(
 				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError - panicked",
-				"workflow", bo.ProcessLocalCSVSQLLiteWorkflowAlias,
+				"workflow", ProcessLocalCSVSQLLiteWorkflowAlias,
 				"error", err,
 			)
 		}
@@ -352,7 +357,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError(t *testing.T)
 		err := env.GetWorkflowError()
 		var ca *workflow.ContinueAsNewError
 		require.True(t, errors.As(err, &ca), "expected ContinueAsNewError, got: %v", err)
-		require.Equal(t, bo.ProcessLocalCSVSQLLiteWorkflowAlias, ca.WorkflowType.Name, "expected workflow type to match")
+		require.Equal(t, ProcessLocalCSVSQLLiteWorkflowAlias, ca.WorkflowType.Name, "expected workflow type to match")
 
 		var next LocalCSVSQLLiteBatchRequest
 		ok, decErr := extractContinueAsNewInput(err, converter.GetDefaultDataConverter(), &next)
@@ -362,7 +367,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError(t *testing.T)
 		require.True(t, next.StartAt > req.StartAt, "expected next.StartAt > req.StartAt")
 	}()
 
-	env.ExecuteWorkflow(bo.ProcessLocalCSVSQLLiteWorkflowAlias, req)
+	env.ExecuteWorkflow(ProcessLocalCSVSQLLiteWorkflowAlias, req)
 	require.True(t, env.IsWorkflowCompleted())
 
 }
@@ -400,7 +405,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath_Server(t *testing.T) {
 	w.RegisterWorkflowWithOptions(
 		bo.ProcessBatchWorkflow[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
 		workflow.RegisterOptions{
-			Name: bo.ProcessLocalCSVSQLLiteWorkflowAlias,
+			Name: ProcessLocalCSVSQLLiteWorkflowAlias,
 		},
 	)
 
@@ -408,19 +413,19 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath_Server(t *testing.T) {
 	w.RegisterActivityWithOptions(
 		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
 		activity.RegisterOptions{
-			Name: bo.FetchNextLocalCSVSourceBatchAlias,
+			Name: FetchNextLocalCSVSourceBatchAlias,
 		},
 	)
 	w.RegisterActivityWithOptions(
 		bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 		activity.RegisterOptions{
-			Name: bo.WriteNextSQLLiteSinkBatchAlias,
+			Name: WriteNextSQLLiteSinkBatchAlias,
 		},
 	)
 	w.RegisterActivityWithOptions(
 		bo.SnapshotActivity[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
 		activity.RegisterOptions{
-			Name: bo.SnapshotLocalFileAlias,
+			Name: SnapshotLocalFileAlias,
 		},
 	)
 
@@ -521,8 +526,8 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath_Server(t *testing.T) {
 			ID:        "pbwlcmsh-" + time.Now().Format("150405.000"),
 			TaskQueue: tq,
 		},
-		bo.ProcessLocalCSVSQLLiteWorkflowAlias, // workflow function
-		req,                                    // workflow input arg1
+		ProcessLocalCSVSQLLiteWorkflowAlias, // workflow function
+		req,                                 // workflow input arg1
 	)
 	require.NoError(t, err)
 
@@ -568,7 +573,7 @@ func Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 	env.RegisterWorkflowWithOptions(
 		bo.ProcessBatchWorkflow[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
 		workflow.RegisterOptions{
-			Name: bo.ProcessLocalCSVSQLLiteWorkflowAlias,
+			Name: ProcessLocalCSVSQLLiteWorkflowAlias,
 		},
 	)
 
@@ -576,19 +581,19 @@ func Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 	env.RegisterActivityWithOptions(
 		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
 		activity.RegisterOptions{
-			Name: bo.FetchNextLocalCSVSourceBatchAlias,
+			Name: FetchNextLocalCSVSourceBatchAlias,
 		},
 	)
 	env.RegisterActivityWithOptions(
 		bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 		activity.RegisterOptions{
-			Name: bo.WriteNextSQLLiteSinkBatchAlias,
+			Name: WriteNextSQLLiteSinkBatchAlias,
 		},
 	)
 	env.RegisterActivityWithOptions(
 		bo.SnapshotActivity[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
 		activity.RegisterOptions{
-			Name: bo.SnapshotLocalFileAlias,
+			Name: SnapshotLocalFileAlias,
 		},
 	)
 
@@ -711,7 +716,7 @@ func Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 		if err := recover(); err != nil {
 			l.Error(
 				"Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath - panicked",
-				"workflow", bo.ProcessLocalCSVSQLLiteWorkflowAlias,
+				"workflow", ProcessLocalCSVSQLLiteWorkflowAlias,
 				"error", err,
 			)
 		}
@@ -742,7 +747,7 @@ func Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 
 	}()
 
-	env.ExecuteWorkflow(bo.ProcessLocalCSVSQLLiteWorkflowAlias, req)
+	env.ExecuteWorkflow(ProcessLocalCSVSQLLiteWorkflowAlias, req)
 
 	require.True(t, env.IsWorkflowCompleted())
 
@@ -768,7 +773,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 	env.RegisterWorkflowWithOptions(
 		bo.ProcessBatchWorkflow[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
 		workflow.RegisterOptions{
-			Name: bo.ProcessLocalCSVSQLLiteWorkflowAlias,
+			Name: ProcessLocalCSVSQLLiteWorkflowAlias,
 		},
 	)
 
@@ -776,19 +781,19 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 	env.RegisterActivityWithOptions(
 		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
 		activity.RegisterOptions{
-			Name: bo.FetchNextLocalCSVSourceBatchAlias,
+			Name: FetchNextLocalCSVSourceBatchAlias,
 		},
 	)
 	env.RegisterActivityWithOptions(
 		bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 		activity.RegisterOptions{
-			Name: bo.WriteNextSQLLiteSinkBatchAlias,
+			Name: WriteNextSQLLiteSinkBatchAlias,
 		},
 	)
 	env.RegisterActivityWithOptions(
 		bo.SnapshotActivity[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
 		activity.RegisterOptions{
-			Name: bo.SnapshotLocalFileAlias,
+			Name: SnapshotLocalFileAlias,
 		},
 	)
 
@@ -892,7 +897,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 		if err := recover(); err != nil {
 			l.Error(
 				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath - panicked",
-				"workflow", bo.ProcessLocalCSVSQLLiteWorkflowAlias,
+				"workflow", ProcessLocalCSVSQLLiteWorkflowAlias,
 				"error", err,
 			)
 		}
@@ -923,7 +928,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 
 	}()
 
-	env.ExecuteWorkflow(bo.ProcessLocalCSVSQLLiteWorkflowAlias, req)
+	env.ExecuteWorkflow(ProcessLocalCSVSQLLiteWorkflowAlias, req)
 
 	require.True(t, env.IsWorkflowCompleted())
 
@@ -1205,14 +1210,14 @@ type fakeSource struct{}
 
 func (s *fakeSource) Name() string                    { return FakeSource }
 func (s *fakeSource) Close(ctx context.Context) error { return nil }
-func (s *fakeSource) Next(ctx context.Context, offset uint64, size uint) (*domain.BatchProcess[domain.CSVRow], error) {
+func (s *fakeSource) Next(ctx context.Context, offset uint64, size uint) (*domain.BatchProcess, error) {
 	if ctx != nil {
 		if fail, ok := ctx.Value("fail-next").(bool); ok && fail {
 			return nil, errors.New(ErrMsgSourceNext)
 		}
 	}
 
-	bp := &domain.BatchProcess[domain.CSVRow]{
+	bp := &domain.BatchProcess{
 		Records:     nil,
 		NextOffset:  offset,
 		StartOffset: offset,
@@ -1243,7 +1248,7 @@ func (c fakeSinkConfig[T]) BuildSink(ctx context.Context) (domain.Sink[T], error
 type fakeSink[T any] struct{}
 
 func (s *fakeSink[T]) Name() string { return FakeSink }
-func (s *fakeSink[T]) Write(ctx context.Context, b *domain.BatchProcess[T]) (*domain.BatchProcess[T], error) {
+func (s *fakeSink[T]) Write(ctx context.Context, b *domain.BatchProcess) (*domain.BatchProcess, error) {
 	if ctx != nil {
 		if fail, ok := ctx.Value("fail-write").(bool); ok && fail {
 			return nil, errors.New(ErrMsgSinkWrite)

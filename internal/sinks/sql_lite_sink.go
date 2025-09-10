@@ -49,7 +49,7 @@ func (s *sqlLiteSink[T]) Close(ctx context.Context) error {
 }
 
 // Write writes the batch of records to SQLLite.
-func (s *sqlLiteSink[T]) Write(ctx context.Context, b *domain.BatchProcess[T]) (*domain.BatchProcess[T], error) {
+func (s *sqlLiteSink[T]) Write(ctx context.Context, b *domain.BatchProcess) (*domain.BatchProcess, error) {
 	if s == nil {
 		return b, ErrSQLLiteSinkNil
 	}
