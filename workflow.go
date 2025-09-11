@@ -238,6 +238,7 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		}
 	}
 
+	// Job queue is empty, all batches processed, build result
 	result := &domain.BatchProcessingResult{
 		JobID:   req.JobID,
 		StartAt: req.StartAt,

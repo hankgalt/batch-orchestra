@@ -29,11 +29,11 @@ import (
 // Source/Sink tied activity aliases for registration and lookup. These aliases
 // are needed to identify the activities for generic implementation.
 const (
-	FetchNextLocalCSVSourceBatchAlias string = "fetch-next-" + sources.LocalCSVSource + "-batch-alias"
-	FetchNextCloudCSVSourceBatchAlias string = "fetch-next-" + sources.CloudCSVSource + "-batch-alias"
-	WriteNextNoopSinkBatchAlias       string = "write-next-" + sinks.NoopSink + "-batch-alias"
-	WriteNextSQLLiteSinkBatchAlias    string = "write-next-" + sinks.SQLLiteSink + "-batch-alias"
-	SnapshotLocalFileAlias            string = "snapshot-" + snapshotters.LocalFileSnapshotter + "-alias"
+	FetchNextLocalCSVSourceBatchActivityAlias string = "fetch-next-" + sources.LocalCSVSource + "-batch-activity-alias"
+	FetchNextCloudCSVSourceBatchActivityAlias string = "fetch-next-" + sources.CloudCSVSource + "-batch-activity-alias"
+	WriteNextNoopSinkBatchActivityAlias       string = "write-next-" + sinks.NoopSink + "-batch-activity-alias"
+	WriteNextSQLLiteSinkBatchActivityAlias    string = "write-next-" + sinks.SQLLiteSink + "-batch-activity-alias"
+	SnapshotLocalFileBatchActivityAlias       string = "snapshot-" + snapshotters.LocalFileSnapshotter + "-batch-activity-alias"
 )
 
 type ETLRequest[T any] struct {
@@ -61,7 +61,7 @@ func Test_FetchNext_LocalTempCSV(t *testing.T) {
 	env.RegisterActivityWithOptions(
 		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
 		activity.RegisterOptions{
-			Name: FetchNextLocalCSVSourceBatchAlias,
+			Name: FetchNextLocalCSVSourceBatchActivityAlias,
 		},
 	)
 
@@ -96,7 +96,7 @@ func Test_FetchNext_LocalTempCSV(t *testing.T) {
 		Offset:    nextOffset,
 		BatchSize: batchSize,
 	}
-	val, err := env.ExecuteActivity(FetchNextLocalCSVSourceBatchAlias, fIn)
+	val, err := env.ExecuteActivity(FetchNextLocalCSVSourceBatchActivityAlias, fIn)
 	require.NoError(t, err)
 
 	var out domain.FetchOutput[domain.CSVRow]
@@ -114,7 +114,7 @@ func Test_FetchNext_LocalTempCSV(t *testing.T) {
 			Offset:    out.Batch.NextOffset,
 			BatchSize: batchSize,
 		}
-		val, err := env.ExecuteActivity(FetchNextLocalCSVSourceBatchAlias, fIn)
+		val, err := env.ExecuteActivity(FetchNextLocalCSVSourceBatchActivityAlias, fIn)
 		require.NoError(t, err)
 		require.NoError(t, val.Get(&out))
 		require.Equal(t, true, out.Batch.NextOffset > 0, "next offset should be greater than 0")
@@ -143,7 +143,7 @@ func Test_FetchNext_LocalCSV(t *testing.T) {
 	env.RegisterActivityWithOptions(
 		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
 		activity.RegisterOptions{
-			Name: FetchNextLocalCSVSourceBatchAlias,
+			Name: FetchNextLocalCSVSourceBatchActivityAlias,
 		},
 	)
 
@@ -168,7 +168,7 @@ func Test_FetchNext_LocalCSV(t *testing.T) {
 		Offset:    nextOffset,
 		BatchSize: batchSize,
 	}
-	val, err := env.ExecuteActivity(FetchNextLocalCSVSourceBatchAlias, fIn)
+	val, err := env.ExecuteActivity(FetchNextLocalCSVSourceBatchActivityAlias, fIn)
 	require.NoError(t, err)
 
 	var out domain.FetchOutput[domain.CSVRow]
@@ -181,7 +181,7 @@ func Test_FetchNext_LocalCSV(t *testing.T) {
 			Offset:    out.Batch.NextOffset,
 			BatchSize: batchSize,
 		}
-		val, err = env.ExecuteActivity(FetchNextLocalCSVSourceBatchAlias, fIn)
+		val, err = env.ExecuteActivity(FetchNextLocalCSVSourceBatchActivityAlias, fIn)
 		require.NoError(t, err)
 
 		require.NoError(t, val.Get(&out))
@@ -207,7 +207,7 @@ func Test_FetchNext_CloudCSV(t *testing.T) {
 	env.RegisterActivityWithOptions(
 		bo.FetchNextActivity[domain.CSVRow, sources.CloudCSVConfig],
 		activity.RegisterOptions{
-			Name: FetchNextCloudCSVSourceBatchAlias,
+			Name: FetchNextCloudCSVSourceBatchActivityAlias,
 		},
 	)
 
@@ -233,7 +233,7 @@ func Test_FetchNext_CloudCSV(t *testing.T) {
 		Offset:    nextOffset,
 		BatchSize: batchSize,
 	}
-	val, err := env.ExecuteActivity(FetchNextCloudCSVSourceBatchAlias, fIn)
+	val, err := env.ExecuteActivity(FetchNextCloudCSVSourceBatchActivityAlias, fIn)
 	require.NoError(t, err)
 
 	var out domain.FetchOutput[domain.CSVRow]
@@ -246,7 +246,7 @@ func Test_FetchNext_CloudCSV(t *testing.T) {
 			Offset:    out.Batch.NextOffset,
 			BatchSize: batchSize,
 		}
-		val, err := env.ExecuteActivity(FetchNextCloudCSVSourceBatchAlias, fIn)
+		val, err := env.ExecuteActivity(FetchNextCloudCSVSourceBatchActivityAlias, fIn)
 		require.NoError(t, err)
 
 		require.NoError(t, val.Get(&out))
@@ -270,7 +270,7 @@ func Test_Write_NoopSink(t *testing.T) {
 	env.RegisterActivityWithOptions(
 		bo.WriteActivity[domain.CSVRow, sinks.NoopSinkConfig[domain.CSVRow]],
 		activity.RegisterOptions{
-			Name: WriteNextNoopSinkBatchAlias,
+			Name: WriteNextNoopSinkBatchActivityAlias,
 		},
 	)
 
@@ -297,7 +297,7 @@ func Test_Write_NoopSink(t *testing.T) {
 		Batch: b,
 	}
 
-	val, err := env.ExecuteActivity(WriteNextNoopSinkBatchAlias, in)
+	val, err := env.ExecuteActivity(WriteNextNoopSinkBatchActivityAlias, in)
 	require.NoError(t, err)
 
 	var out domain.WriteOutput[domain.CSVRow]
@@ -324,7 +324,7 @@ func Test_Write_SQLLiteSink(t *testing.T) {
 	env.RegisterActivityWithOptions(
 		bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 		activity.RegisterOptions{
-			Name: WriteNextSQLLiteSinkBatchAlias,
+			Name: WriteNextSQLLiteSinkBatchActivityAlias,
 		},
 	)
 
@@ -378,7 +378,7 @@ func Test_Write_SQLLiteSink(t *testing.T) {
 		Batch: b,
 	}
 
-	val, err := env.ExecuteActivity(WriteNextSQLLiteSinkBatchAlias, in)
+	val, err := env.ExecuteActivity(WriteNextSQLLiteSinkBatchActivityAlias, in)
 	require.NoError(t, err)
 
 	var out domain.WriteOutput[domain.CSVRow]
@@ -415,13 +415,13 @@ func Test_FetchAndWrite_LocalTempCSVSource_SQLLiteSink_Queue(t *testing.T) {
 	env.RegisterActivityWithOptions(
 		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
 		activity.RegisterOptions{
-			Name: FetchNextLocalCSVSourceBatchAlias,
+			Name: FetchNextLocalCSVSourceBatchActivityAlias,
 		},
 	)
 	env.RegisterActivityWithOptions(
 		bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 		activity.RegisterOptions{
-			Name: WriteNextSQLLiteSinkBatchAlias,
+			Name: WriteNextSQLLiteSinkBatchActivityAlias,
 		},
 	)
 
@@ -487,7 +487,7 @@ func Test_FetchAndWrite_LocalTempCSVSource_SQLLiteSink_Queue(t *testing.T) {
 	}
 
 	// Execute the fetch activity for first batch
-	fVal, err := env.ExecuteActivity(FetchNextLocalCSVSourceBatchAlias, fIn)
+	fVal, err := env.ExecuteActivity(FetchNextLocalCSVSourceBatchActivityAlias, fIn)
 	require.NoError(t, err)
 
 	var fOut domain.FetchOutput[domain.CSVRow]
@@ -505,7 +505,7 @@ func Test_FetchAndWrite_LocalTempCSVSource_SQLLiteSink_Queue(t *testing.T) {
 	}
 
 	// Execute async the write activity for first batch
-	wVal, err := env.ExecuteActivity(WriteNextSQLLiteSinkBatchAlias, wIn)
+	wVal, err := env.ExecuteActivity(WriteNextSQLLiteSinkBatchActivityAlias, wIn)
 	require.NoError(t, err)
 
 	// Push the write activity future to the queue
@@ -522,7 +522,7 @@ func Test_FetchAndWrite_LocalTempCSVSource_SQLLiteSink_Queue(t *testing.T) {
 				BatchSize: etlReq.BatchSize,
 			}
 
-			fVal, err := env.ExecuteActivity(FetchNextLocalCSVSourceBatchAlias, fIn)
+			fVal, err := env.ExecuteActivity(FetchNextLocalCSVSourceBatchActivityAlias, fIn)
 			require.NoError(t, err)
 
 			var fOut domain.FetchOutput[domain.CSVRow]
@@ -538,7 +538,7 @@ func Test_FetchAndWrite_LocalTempCSVSource_SQLLiteSink_Queue(t *testing.T) {
 				Batch: fOut.Batch,
 			}
 
-			wVal, err := env.ExecuteActivity(WriteNextSQLLiteSinkBatchAlias, wIn)
+			wVal, err := env.ExecuteActivity(WriteNextSQLLiteSinkBatchActivityAlias, wIn)
 			require.NoError(t, err)
 
 			q.PushBack(wVal)
@@ -590,13 +590,13 @@ func Test_FetchAndWrite_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 	env.RegisterActivityWithOptions(
 		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
 		activity.RegisterOptions{
-			Name: FetchNextLocalCSVSourceBatchAlias,
+			Name: FetchNextLocalCSVSourceBatchActivityAlias,
 		},
 	)
 	env.RegisterActivityWithOptions(
 		bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 		activity.RegisterOptions{
-			Name: WriteNextSQLLiteSinkBatchAlias,
+			Name: WriteNextSQLLiteSinkBatchActivityAlias,
 		},
 	)
 
@@ -677,7 +677,7 @@ func Test_FetchAndWrite_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 	}
 
 	// Execute the fetch activity for first batch
-	fVal, err := env.ExecuteActivity(FetchNextLocalCSVSourceBatchAlias, fIn)
+	fVal, err := env.ExecuteActivity(FetchNextLocalCSVSourceBatchActivityAlias, fIn)
 	require.NoError(t, err)
 
 	var fOut domain.FetchOutput[domain.CSVRow]
@@ -695,7 +695,7 @@ func Test_FetchAndWrite_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 	}
 
 	// Execute async the write activity for first batch
-	wVal, err := env.ExecuteActivity(WriteNextSQLLiteSinkBatchAlias, wIn)
+	wVal, err := env.ExecuteActivity(WriteNextSQLLiteSinkBatchActivityAlias, wIn)
 	require.NoError(t, err)
 
 	// Push the write activity future to the queue
@@ -712,7 +712,7 @@ func Test_FetchAndWrite_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 				BatchSize: etlReq.BatchSize,
 			}
 
-			fVal, err := env.ExecuteActivity(FetchNextLocalCSVSourceBatchAlias, fIn)
+			fVal, err := env.ExecuteActivity(FetchNextLocalCSVSourceBatchActivityAlias, fIn)
 			require.NoError(t, err)
 
 			var fOut domain.FetchOutput[domain.CSVRow]
@@ -728,7 +728,7 @@ func Test_FetchAndWrite_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 				Batch: fOut.Batch,
 			}
 
-			wVal, err := env.ExecuteActivity(WriteNextSQLLiteSinkBatchAlias, wIn)
+			wVal, err := env.ExecuteActivity(WriteNextSQLLiteSinkBatchActivityAlias, wIn)
 			require.NoError(t, err)
 
 			q.PushBack(wVal)

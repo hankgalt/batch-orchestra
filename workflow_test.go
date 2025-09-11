@@ -93,21 +93,21 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_SQLLi
 		s.env.RegisterActivityWithOptions(
 			bo.FetchNextActivity[domain.CSVRow, sources.CloudCSVConfig],
 			activity.RegisterOptions{
-				Name: FetchNextCloudCSVSourceBatchAlias,
+				Name: FetchNextCloudCSVSourceBatchActivityAlias,
 			},
 		)
 		// Register write activity for SQLLite sink
 		s.env.RegisterActivityWithOptions(
 			bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 			activity.RegisterOptions{
-				Name: WriteNextSQLLiteSinkBatchAlias,
+				Name: WriteNextSQLLiteSinkBatchActivityAlias,
 			},
 		)
 		// Register snapshot activity for local file snapshotter
 		s.env.RegisterActivityWithOptions(
 			bo.SnapshotActivity[snapshotters.LocalFileSnapshotterConfig],
 			activity.RegisterOptions{
-				Name: SnapshotLocalFileAlias,
+				Name: SnapshotLocalFileBatchActivityAlias,
 			},
 		)
 
@@ -262,19 +262,19 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError(t *testing.T)
 	env.RegisterActivityWithOptions(
 		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
 		activity.RegisterOptions{
-			Name: FetchNextLocalCSVSourceBatchAlias,
+			Name: FetchNextLocalCSVSourceBatchActivityAlias,
 		},
 	)
 	env.RegisterActivityWithOptions(
 		bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 		activity.RegisterOptions{
-			Name: WriteNextSQLLiteSinkBatchAlias,
+			Name: WriteNextSQLLiteSinkBatchActivityAlias,
 		},
 	)
 	env.RegisterActivityWithOptions(
 		bo.SnapshotActivity[snapshotters.LocalFileSnapshotterConfig],
 		activity.RegisterOptions{
-			Name: SnapshotLocalFileAlias,
+			Name: SnapshotLocalFileBatchActivityAlias,
 		},
 	)
 
@@ -416,19 +416,19 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath_Server(t *testing.T) {
 	w.RegisterActivityWithOptions(
 		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
 		activity.RegisterOptions{
-			Name: FetchNextLocalCSVSourceBatchAlias,
+			Name: FetchNextLocalCSVSourceBatchActivityAlias,
 		},
 	)
 	w.RegisterActivityWithOptions(
 		bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 		activity.RegisterOptions{
-			Name: WriteNextSQLLiteSinkBatchAlias,
+			Name: WriteNextSQLLiteSinkBatchActivityAlias,
 		},
 	)
 	w.RegisterActivityWithOptions(
 		bo.SnapshotActivity[snapshotters.LocalFileSnapshotterConfig],
 		activity.RegisterOptions{
-			Name: SnapshotLocalFileAlias,
+			Name: SnapshotLocalFileBatchActivityAlias,
 		},
 	)
 
@@ -584,19 +584,19 @@ func Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 	env.RegisterActivityWithOptions(
 		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
 		activity.RegisterOptions{
-			Name: FetchNextLocalCSVSourceBatchAlias,
+			Name: FetchNextLocalCSVSourceBatchActivityAlias,
 		},
 	)
 	env.RegisterActivityWithOptions(
 		bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 		activity.RegisterOptions{
-			Name: WriteNextSQLLiteSinkBatchAlias,
+			Name: WriteNextSQLLiteSinkBatchActivityAlias,
 		},
 	)
 	env.RegisterActivityWithOptions(
 		bo.SnapshotActivity[snapshotters.LocalFileSnapshotterConfig],
 		activity.RegisterOptions{
-			Name: SnapshotLocalFileAlias,
+			Name: SnapshotLocalFileBatchActivityAlias,
 		},
 	)
 
@@ -784,19 +784,19 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 	env.RegisterActivityWithOptions(
 		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
 		activity.RegisterOptions{
-			Name: FetchNextLocalCSVSourceBatchAlias,
+			Name: FetchNextLocalCSVSourceBatchActivityAlias,
 		},
 	)
 	env.RegisterActivityWithOptions(
 		bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 		activity.RegisterOptions{
-			Name: WriteNextSQLLiteSinkBatchAlias,
+			Name: WriteNextSQLLiteSinkBatchActivityAlias,
 		},
 	)
 	env.RegisterActivityWithOptions(
 		bo.SnapshotActivity[snapshotters.LocalFileSnapshotterConfig],
 		activity.RegisterOptions{
-			Name: SnapshotLocalFileAlias,
+			Name: SnapshotLocalFileBatchActivityAlias,
 		},
 	)
 

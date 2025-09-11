@@ -7,15 +7,15 @@ import (
 )
 
 func GetFetchActivityName[T any](srcCfg SourceConfig[T]) string {
-	return "fetch-next-" + srcCfg.Name() + "-batch-alias"
+	return "fetch-next-" + srcCfg.Name() + "-batch-activity-alias"
 }
 
 func GetWriteActivityName[T any](sinkCfg SinkConfig[T]) string {
-	return "write-next-" + sinkCfg.Name() + "-batch-alias"
+	return "write-next-" + sinkCfg.Name() + "-batch-activity-alias"
 }
 
 func GetSnapshotActivityName(snapCfg SnapshotConfig) string {
-	return "snapshot-" + snapCfg.Name() + "-alias"
+	return "snapshot-" + snapCfg.Name() + "-batch-activity-alias"
 }
 
 func GetBatchId(start, end uint64, prefix, suffix string) string {
