@@ -6,16 +6,16 @@ import (
 	"strings"
 )
 
-func GetFetchActivityName[T any](src SourceConfig[T]) string {
-	return "fetch-next-" + src.Name() + "-batch-alias"
+func GetFetchActivityName[T any](srcCfg SourceConfig[T]) string {
+	return "fetch-next-" + srcCfg.Name() + "-batch-alias"
 }
 
-func GetWriteActivityName[T any](sink SinkConfig[T]) string {
-	return "write-next-" + sink.Name() + "-batch-alias"
+func GetWriteActivityName[T any](sinkCfg SinkConfig[T]) string {
+	return "write-next-" + sinkCfg.Name() + "-batch-alias"
 }
 
-func GetSnapshotActivityName(snapshotter SnapshotConfig) string {
-	return "snapshot-" + snapshotter.Name() + "-alias"
+func GetSnapshotActivityName(snapCfg SnapshotConfig) string {
+	return "snapshot-" + snapCfg.Name() + "-alias"
 }
 
 func GetBatchId(start, end uint64, prefix, suffix string) string {

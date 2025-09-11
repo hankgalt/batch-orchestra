@@ -88,45 +88,38 @@ func WriteActivity[T any, D domain.SinkConfig[T]](
 	}, nil
 }
 
-func SnapshotActivity[T any, S domain.SourceConfig[T], D domain.SinkConfig[T], SS domain.SnapshotConfig](
+func SnapshotActivity[SS domain.SnapshotConfig](
 	ctx context.Context,
-	req *domain.BatchProcessingRequest[T, S, D, SS],
+	result *domain.BatchProcessingResult,
+	snapshot *domain.BatchSnapshot,
+	snapCfg SS,
 ) (*domain.BatchSnapshot, error) {
 	l := activity.GetLogger(ctx)
-	l.Debug("SnapshotActivity started")
+	l.Debug("SnapshotActivity started", "name", snapCfg.Name(), "job-id", result.JobID)
 
-	sk, err := req.Snapshotter.BuildSnapshotter(ctx)
+	sk, err := snapCfg.BuildSnapshotter(ctx)
 	if err != nil {
-		l.Error("error building snapshotter", "error", err.Error())
+		l.Error("error building snapshotter", "name", snapCfg.Name(), "error", err.Error())
 		return nil, temporal.NewApplicationErrorWithCause(err.Error(), err.Error(), err)
 	}
 	defer func() {
 		if err := sk.Close(ctx); err != nil {
-			l.Error("error closing snapshotter", "error", err.Error())
+			l.Error("error closing snapshotter", "name", snapCfg.Name(), "error", err.Error())
 		}
 	}()
 
 	// Build batch snapshot
-	snapshot := buildRequestSnapshot(req)
-
-	// Build batch result summary
-	batchResult := &domain.BatchProcessingResult{
-		JobID:   req.JobID,
-		StartAt: req.StartAt,
-		Done:    req.Done,
-		Offsets: req.Offsets,
-		Batches: req.Batches,
-	}
+	updatedSnapshot := buildRequestSnapshot(result.Batches, snapshot)
 
 	// Serialize batch result summary
-	resultJSON, err := json.MarshalIndent(batchResult, "", "  ")
+	resultJSON, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
 		l.Error("error marshalling batch results", "error", err.Error())
 		return snapshot, temporal.NewApplicationErrorWithCause(err.Error(), err.Error(), err)
 	}
 
-	// Save batch result summary
-	key := fmt.Sprintf("%s-%d", req.JobID, req.StartAt)
+	// Save batch result summary snapshot
+	key := fmt.Sprintf("%s-%d", result.JobID, result.StartAt)
 	err = sk.Snapshot(ctx, key, resultJSON)
 	if err != nil {
 		l.Error("error saving snapshot", "error", err.Error())
@@ -134,26 +127,24 @@ func SnapshotActivity[T any, S domain.SourceConfig[T], D domain.SinkConfig[T], S
 	}
 
 	// return batch snapshot
-	return snapshot, nil
+	return updatedSnapshot, nil
 }
 
-func buildRequestSnapshot[T any, S domain.SourceConfig[T], D domain.SinkConfig[T], SS domain.SnapshotConfig](
-	req *domain.BatchProcessingRequest[T, S, D, SS],
-) *domain.BatchSnapshot {
+func buildRequestSnapshot(batches map[string]*domain.BatchProcess, snapshot *domain.BatchSnapshot) *domain.BatchSnapshot {
 	errRecs := map[string][]domain.ErrorRecord{}
-	numProcessed := uint(len(req.Batches))
+	numProcessed := uint(len(batches))
 	numRecords := uint(0)
 
-	if req.Snapshot != nil {
-		if req.Snapshot.Errors != nil {
-			errRecs = req.Snapshot.Errors
+	if snapshot != nil {
+		if snapshot.Errors != nil {
+			errRecs = snapshot.Errors
 		}
-		numProcessed += req.Snapshot.NumProcessed
-		numRecords += req.Snapshot.NumRecords
+		numProcessed += snapshot.NumProcessed
+		numRecords += snapshot.NumRecords
 	}
 
 	// Collect errors from batches
-	for id, b := range req.Batches {
+	for id, b := range batches {
 		var errs []domain.ErrorRecord
 		for _, r := range b.Records {
 			if r.BatchResult.Error != "" {
@@ -172,7 +163,6 @@ func buildRequestSnapshot[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	}
 
 	return &domain.BatchSnapshot{
-		Done:         req.Done,
 		NumProcessed: numProcessed,
 		NumRecords:   numRecords,
 		Errors:       errRecs,

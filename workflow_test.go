@@ -82,29 +82,30 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_SQLLi
 	s.env.SetTestTimeout(24 * time.Hour)
 
 	s.Run("valid cloud csv to mongo migration request", func() {
-		// Register the workflow
+		// Register batch process workflow for cloud csv to SQLLite with batch processing snapshots saved as local files.
 		s.env.RegisterWorkflowWithOptions(
 			bo.ProcessBatchWorkflow[domain.CSVRow, sources.CloudCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
 			workflow.RegisterOptions{
 				Name: ProcessCloudCSVSQLLiteWorkflowAlias,
 			},
 		)
-
-		// Register activities.
+		// Register fetch activity cloud csv source
 		s.env.RegisterActivityWithOptions(
 			bo.FetchNextActivity[domain.CSVRow, sources.CloudCSVConfig],
 			activity.RegisterOptions{
 				Name: FetchNextCloudCSVSourceBatchAlias,
 			},
 		)
+		// Register write activity for SQLLite sink
 		s.env.RegisterActivityWithOptions(
 			bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
 			activity.RegisterOptions{
 				Name: WriteNextSQLLiteSinkBatchAlias,
 			},
 		)
+		// Register snapshot activity for local file snapshotter
 		s.env.RegisterActivityWithOptions(
-			bo.SnapshotActivity[domain.CSVRow, sources.CloudCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
+			bo.SnapshotActivity[snapshotters.LocalFileSnapshotterConfig],
 			activity.RegisterOptions{
 				Name: SnapshotLocalFileAlias,
 			},
@@ -124,7 +125,7 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_SQLLi
 			MappingRules: domain.BuildBusinessModelTransformRules(),
 		}
 
-		// Sink - MongoDB
+		// Sink - SQLLite
 		dbFile := "data/__deleteme.db"
 		dbClient, err := sqllite.NewSQLLiteDBClient(dbFile)
 		s.NoError(err)
@@ -148,12 +149,14 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_SQLLi
 			Table:  "agent",
 		}
 
+		// Snapshotter - local file
 		filePath, err := utils.BuildFilePath()
 		s.NoError(err, "error building csv file path for test")
 		ssCfg := snapshotters.LocalFileSnapshotterConfig{
 			Path: filePath,
 		}
 
+		// Build the cloud csv to sqllite request
 		req := &CloudCSVSQLLiteBatchRequest{
 			JobID:               "job-cloud-csv-sqllite-happy",
 			BatchSize:           400,
@@ -207,8 +210,8 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_SQLLi
 				} else {
 					l.Debug(
 						"Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - success",
-						"offsets", result.Offsets,
-						"num-batches-processed", len(result.Offsets),
+						"num-batches-processed", result.Snapshot.NumProcessed,
+						"num-records-processed", result.Snapshot.NumRecords,
 					)
 
 					s.EqualValues(10, uint(result.Snapshot.NumProcessed))
@@ -269,7 +272,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError(t *testing.T)
 		},
 	)
 	env.RegisterActivityWithOptions(
-		bo.SnapshotActivity[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
+		bo.SnapshotActivity[snapshotters.LocalFileSnapshotterConfig],
 		activity.RegisterOptions{
 			Name: SnapshotLocalFileAlias,
 		},
@@ -423,7 +426,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath_Server(t *testing.T) {
 		},
 	)
 	w.RegisterActivityWithOptions(
-		bo.SnapshotActivity[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
+		bo.SnapshotActivity[snapshotters.LocalFileSnapshotterConfig],
 		activity.RegisterOptions{
 			Name: SnapshotLocalFileAlias,
 		},
@@ -548,8 +551,8 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath_Server(t *testing.T) {
 	l.Debug("Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath_Server - workflow completed successfully",
 		"workflow-id", run.GetID(),
 		"workflow-run-id", run.GetRunID(),
-		"offsets", result.Offsets,
-		"num-batches-processed", len(result.Offsets),
+		"num-batches-processed", result.Snapshot.NumProcessed,
+		"num-records-processed", result.Snapshot.NumRecords,
 	)
 }
 
@@ -591,7 +594,7 @@ func Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 		},
 	)
 	env.RegisterActivityWithOptions(
-		bo.SnapshotActivity[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
+		bo.SnapshotActivity[snapshotters.LocalFileSnapshotterConfig],
 		activity.RegisterOptions{
 			Name: SnapshotLocalFileAlias,
 		},
@@ -733,8 +736,8 @@ func Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 			require.NoError(t, err)
 			l.Debug(
 				"Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath - success",
-				"result-offsets", result.Offsets,
-				"num-batches-processed", len(result.Batches),
+				"num-batches-processed", result.Snapshot.NumProcessed,
+				"num-records-processed", result.Snapshot.NumRecords,
 			)
 			require.EqualValues(t, 4, uint(result.Snapshot.NumProcessed))
 			errorCount := 0
@@ -791,7 +794,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 		},
 	)
 	env.RegisterActivityWithOptions(
-		bo.SnapshotActivity[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
+		bo.SnapshotActivity[snapshotters.LocalFileSnapshotterConfig],
 		activity.RegisterOptions{
 			Name: SnapshotLocalFileAlias,
 		},
@@ -914,8 +917,8 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 			require.NoError(t, err)
 			l.Debug(
 				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath - success",
-				"result-offsets", result.Offsets,
-				"num-batches-processed", len(result.Batches),
+				"num-batches-processed", result.Snapshot.NumProcessed,
+				"num-records-processed", result.Snapshot.NumRecords,
 			)
 			require.EqualValues(t, 11, uint(result.Snapshot.NumProcessed))
 			errorCount := 0
