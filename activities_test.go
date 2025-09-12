@@ -393,7 +393,7 @@ func Test_Write_SQLLiteSink(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func Test_FetchAndWrite_LocalTempCSVSource_SQLLiteSink_Queue(t *testing.T) {
+func Test_FetchAndWrite_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 	// setup test environment
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestActivityEnvironment()
@@ -446,9 +446,9 @@ func Test_FetchAndWrite_LocalTempCSVSource_SQLLiteSink_Queue(t *testing.T) {
 	require.NoError(t, err)
 
 	defer func(cl *sqllite.SQLLiteDBClient, fpath string) {
-		ags, err := cl.FetchRecords(context.Background(), "agent", 0, 15)
+		ags, err := cl.FetchRecords(context.Background(), "agent", 0, 25)
 		require.NoError(t, err)
-		require.Equal(t, len(ags), 13)
+		require.Equal(t, len(ags), 20)
 
 		require.NoError(t, cl.Close(ctx), "close db client")
 		require.NoError(t, os.Remove(fpath), "cleanup temp db file")
@@ -568,7 +568,7 @@ func Test_FetchAndWrite_LocalTempCSVSource_SQLLiteSink_Queue(t *testing.T) {
 	require.Equal(t, true, len(etlReq.Offsets) > 0)
 }
 
-func Test_FetchAndWrite_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
+func Test_FetchAndWrite_Temp_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 	// setup test environment
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestActivityEnvironment()
