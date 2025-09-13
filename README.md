@@ -71,11 +71,12 @@ Generics can produce unstable function names (e.g., “func1”). To avoid that,
 #### Define Snapshotter
 - See `internal/snapshotters` for examples
 #### Register activities/workflow (with aliases):
-- Always register activities and workflows with explicit names (aliases).
+- Define Request types & create activity & workflow aliases for configured source/sink/snapshotter.
+- Always register activities and workflows with explicit names (aliases) derived from configured source/sink/snapshotter. See example in `activities_test.go`.
 With generics, reflection-derived names can be unstable (e.g., “func1”), which breaks resolution.
-- Use the same names inside the workflow when scheduling activities.
+- The workflow uses the same generated aliases, when scheduling activities.
 #### Start a workflow run:
-- Construct a BatchProcessingRequest with concrete SourceConfig and SinkConfig. Use same cloud or local file config to build relevant snapshotter config
+- Construct a BatchProcessingRequest with concrete SourceConfig and SinkConfig. Use same cloud or local file config to build relevant snapshotter config that saves snapshots at same location as local/cloud file.
 - Choose a reasonable BatchSize and initial StartAt offset
 - Execute the registered workflow name on your Temporal task queue.
 
