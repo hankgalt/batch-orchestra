@@ -105,19 +105,23 @@ type FetchOutput[T any] struct {
 // BatchProcessingRequest[T any, S SourceConfig[T], D SinkConfig[T]]
 // is a request to process a batch of T from a source S and write to a sink D.
 type BatchProcessingRequest[T any, S SourceConfig[T], D SinkConfig[T], SS SnapshotConfig] struct {
-	MaxInProcessBatches uint                       // maximum number of batches to process
-	BatchSize           uint                       // maximum size of each batch
-	MaxBatches          uint                       // max number of batches to processed be waorkflow (continue as new limit)
 	JobID               string                     // unique identifier for the job
-	StartAt             uint64                     // initial offset
-	Source              S                          // source configuration
-	Sink                D                          // sink configuration
-	Snapshotter         SS                         // snapshotter configuration
-	Done                bool                       // whether the job is done
-	Offsets             []uint64                   // list of offsets for each batch
-	Batches             map[string]*BatchProcess   // map of batch by ID
+	BatchSize           uint                       // maximum size of each batch
+	MaxInProcessBatches uint                       // maximum number of batches to process
+	MaxBatches          uint                       // max number of batches to processed be waorkflow (continue as new limit)
+	PauseDuration       time.Duration              // duration to pause between batches
+	PauseRecordCount    uint                       // number of times to pause between batches
 	Policies            map[string]RetryPolicySpec // map of retry policies for batch activities by activity alias
-	Snapshot            *BatchSnapshot             // Processed snapshot
+
+	Source      S  // source configuration
+	Sink        D  // sink configuration
+	Snapshotter SS // snapshotter configuration
+
+	StartAt  uint64                   // initial offset
+	Done     bool                     // whether the job is done
+	Offsets  []uint64                 // list of offsets for each batch
+	Batches  map[string]*BatchProcess // map of batch by ID
+	Snapshot *BatchSnapshot           // Processed snapshot
 }
 
 type Rule struct {

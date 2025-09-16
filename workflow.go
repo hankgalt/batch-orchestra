@@ -12,6 +12,9 @@ import (
 	"github.com/hankgalt/batch-orchestra/pkg/domain"
 )
 
+const DEFAULT_PAUSE_RECORD_COUNT = uint(1000)
+const DEFAULT_PAUSE_DURATION = 15 * time.Second
+
 const (
 	FAILED_REMOVE_FUTURE = "failed to remove future from queue"
 	ERR_QUERY_HANDLER    = "error setting query handler"
@@ -130,7 +133,7 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	// setup activity options
 	fetchAO := buildFetchActivityOptions(req)
 	writeAO := buildWriteActivityOptions(req)
-	snapshotAO := defaultActivityOptions()
+	snapshotAO := buildSnapshotActivityOptions(req)
 
 	// setup fetch & write contexts
 	fetchCtx := workflow.WithActivityOptions(ctx, fetchAO)
@@ -281,21 +284,43 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	if workflow.GetInfo(ctx).GetContinueAsNewSuggested() {
 		l.Debug(
 			"processBatchWorkflow continuing as new suggested",
-			"source", req.Source.Name(),
-			"sink", req.Sink.Name(),
 			"curr-start-at", req.StartAt,
 			"batches-processed", batchCount,
 			"workflow", wkflname,
 			"fetch-activity", fetchActivityAlias,
 			"write-activity", writeActivityAlias,
+			"snapshot-activity", snapshotActivityAlias,
 		)
 	}
 
+	pauseRecCnt := DEFAULT_PAUSE_RECORD_COUNT
+	pauseDur := DEFAULT_PAUSE_DURATION
+	if req.PauseRecordCount > 0 {
+		pauseRecCnt = req.PauseRecordCount
+	}
+	if req.PauseDuration > 0 {
+		pauseDur = req.PauseDuration
+	}
+
 	if req.Snapshot != nil {
-		if req.Snapshot.NumRecords/1000 > req.Snapshot.PauseCount {
-			err := workflow.Sleep(ctx, 15*time.Second)
+		if req.Snapshot.NumRecords/pauseRecCnt > req.Snapshot.PauseCount {
+			l.Error(
+				"processBatchWorkflow pausing to reduce sink load",
+				"curr-start-at", req.StartAt,
+				"batches-processed", batchCount,
+				"workflow", wkflname,
+				"fetch-activity", fetchActivityAlias,
+				"write-activity", writeActivityAlias,
+				"snapshot-activity", snapshotActivityAlias,
+				"snapshot-pause-count", req.Snapshot.PauseCount,
+				"snapshot-num-records", req.Snapshot.NumRecords,
+				"num-processed", req.Snapshot.NumProcessed,
+				"error", "pausing to reduce sink load",
+			)
+			// sleep for pause duration to reduce sink load
+			err := workflow.Sleep(ctx, pauseDur)
 			if err != nil {
-				l.Error("error sleeping", "error", err.Error())
+				l.Error("error pausing workflow", "error", err.Error())
 			}
 			req.Snapshot.PauseCount++
 		}
@@ -413,4 +438,36 @@ func buildWriteActivityOptions[T any, S domain.SourceConfig[T], D domain.SinkCon
 	}
 
 	return writeAO
+}
+
+func buildSnapshotActivityOptions[T any, S domain.SourceConfig[T], D domain.SinkConfig[T], SS domain.SnapshotConfig](
+	req *domain.BatchProcessingRequest[T, S, D, SS],
+) workflow.ActivityOptions {
+	// setup activity options
+	ao := defaultActivityOptions()
+
+	// Get the snapshot activity aliases based on the source and sink
+	ssActivityAlias := domain.GetSnapshotActivityName(req.Snapshotter)
+
+	// merge provided snapshot activity options & build snapshot context
+	ssAO := ao
+	if policy, ok := req.Policies[ssActivityAlias]; ok {
+		if policy.MaximumAttempts > 0 {
+			ssAO.RetryPolicy.MaximumAttempts = policy.MaximumAttempts
+		}
+		if policy.InitialInterval > 0 {
+			ssAO.RetryPolicy.InitialInterval = policy.InitialInterval
+		}
+		if policy.BackoffCoefficient > 0 {
+			ssAO.RetryPolicy.BackoffCoefficient = policy.BackoffCoefficient
+		}
+		if policy.MaximumInterval > 0 {
+			ssAO.RetryPolicy.MaximumInterval = policy.MaximumInterval
+		}
+		if len(policy.NonRetryableErrorTypes) > 0 {
+			ssAO.RetryPolicy.NonRetryableErrorTypes = policy.NonRetryableErrorTypes
+		}
+	}
+
+	return ssAO
 }
