@@ -140,7 +140,7 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	// TODO retry case, check for error
 	// Initiate a new queue & batch count
 	q := list.New()
-	batchCount := uint(0)
+	batchCount := uint(len(req.Batches))
 	l.Debug(
 		"processBatchWorkflow context set & queue initiated",
 		"source", req.Source.Name(),
@@ -151,37 +151,39 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		"write-activity", writeActivityAlias,
 	)
 
-	// Fetch first batch from source
-	var fetched domain.FetchOutput[T]
-	if err := workflow.ExecuteActivity(fetchCtx, fetchActivityAlias, &domain.FetchInput[T, S]{
-		Source:    req.Source,
-		Offset:    req.Offsets[len(req.Offsets)-1],
-		BatchSize: req.BatchSize,
-	}).Get(fetchCtx, &fetched); err != nil {
-		return req, err
+	if !req.Done {
+		// Fetch first batch from source
+		var fetched domain.FetchOutput[T]
+		if err := workflow.ExecuteActivity(fetchCtx, fetchActivityAlias, &domain.FetchInput[T, S]{
+			Source:    req.Source,
+			Offset:    req.Offsets[len(req.Offsets)-1],
+			BatchSize: req.BatchSize,
+		}).Get(fetchCtx, &fetched); err != nil {
+			return req, err
+		}
+		batchCount++
+
+		// Update request state with fetched batch
+		req.Offsets = append(req.Offsets, fetched.Batch.NextOffset)
+		req.Batches[domain.GetBatchId(fetched.Batch.StartOffset, fetched.Batch.NextOffset, "", "")] = fetched.Batch
+		req.Done = fetched.Batch.Done
+
+		// Write first batch to sink (async) & push resulting future/promise to queue
+		future := workflow.ExecuteActivity(writeCtx, writeActivityAlias, &domain.WriteInput[T, D]{
+			Sink:  req.Sink,
+			Batch: fetched.Batch,
+		})
+		q.PushBack(future)
+		l.Debug(
+			"processBatchWorkflow first batch pushed to queue",
+			"source", req.Source.Name(),
+			"sink", req.Sink.Name(),
+			"start-at", req.StartAt,
+			"workflow", wkflname,
+			"fetch-activity", fetchActivityAlias,
+			"write-activity", writeActivityAlias,
+		)
 	}
-	batchCount++
-
-	// Update request state with fetched batch
-	req.Offsets = append(req.Offsets, fetched.Batch.NextOffset)
-	req.Batches[domain.GetBatchId(fetched.Batch.StartOffset, fetched.Batch.NextOffset, "", "")] = fetched.Batch
-	req.Done = fetched.Batch.Done
-
-	// Write first batch to sink (async) & push resulting future/promise to queue
-	future := workflow.ExecuteActivity(writeCtx, writeActivityAlias, &domain.WriteInput[T, D]{
-		Sink:  req.Sink,
-		Batch: fetched.Batch,
-	})
-	q.PushBack(future)
-	l.Debug(
-		"processBatchWorkflow first batch pushed to queue",
-		"source", req.Source.Name(),
-		"sink", req.Sink.Name(),
-		"start-at", req.StartAt,
-		"workflow", wkflname,
-		"fetch-activity", fetchActivityAlias,
-		"write-activity", writeActivityAlias,
-	)
 
 	// While there are items in queue
 	for q.Len() > 0 {
@@ -189,6 +191,7 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 			// If # of items in queue are less than concurrent processing limit,
 			// there's more data & max batch limit not reached
 			// Fetch the next batch from the source
+			var fetched domain.FetchOutput[T]
 			if err := workflow.ExecuteActivity(fetchCtx, fetchActivityAlias, &domain.FetchInput[T, S]{
 				Source:    req.Source,
 				Offset:    req.Offsets[len(req.Offsets)-1],
@@ -272,6 +275,31 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		// If snapshot was taken successfully, update the request
 		sShot.Done = req.Done
 		req.Snapshot = &sShot
+	}
+
+	// get continue as new suggested
+	if workflow.GetInfo(ctx).GetContinueAsNewSuggested() {
+		l.Debug(
+			"processBatchWorkflow continuing as new suggested",
+			"source", req.Source.Name(),
+			"sink", req.Sink.Name(),
+			"curr-start-at", req.StartAt,
+			"batches-processed", batchCount,
+			"workflow", wkflname,
+			"fetch-activity", fetchActivityAlias,
+			"write-activity", writeActivityAlias,
+		)
+	}
+
+	if req.Snapshot != nil {
+		if req.Snapshot.NumRecords/1000 > req.Snapshot.PauseCount {
+			err := workflow.Sleep(ctx, 15*time.Second)
+			if err != nil {
+				l.Error("error sleeping", "error", err.Error())
+			}
+			req.Snapshot.PauseCount++
+		}
+
 	}
 
 	if !req.Done && batchCount >= req.MaxBatches {

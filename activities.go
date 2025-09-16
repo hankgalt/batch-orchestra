@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/temporal"
@@ -97,6 +98,11 @@ func SnapshotActivity[SS domain.SnapshotConfig](
 	l := activity.GetLogger(ctx)
 	l.Debug("SnapshotActivity started", "name", snapCfg.Name(), "job-id", result.JobID)
 
+	if slices.Contains(snapshot.SnapshotIdx, result.StartAt) {
+		l.Info("snapshot already exists for this offset, skipping", "offset", result.StartAt)
+		return snapshot, nil
+	}
+
 	sk, err := snapCfg.BuildSnapshotter(ctx)
 	if err != nil {
 		l.Error("error building snapshotter", "name", snapCfg.Name(), "error", err.Error())
@@ -110,6 +116,7 @@ func SnapshotActivity[SS domain.SnapshotConfig](
 
 	// Build batch snapshot
 	updatedSnapshot := buildRequestSnapshot(result.Batches, snapshot)
+	updatedSnapshot.SnapshotIdx = append(updatedSnapshot.SnapshotIdx, result.StartAt)
 
 	// Serialize batch result summary
 	resultJSON, err := json.MarshalIndent(result, "", "  ")
@@ -166,5 +173,7 @@ func buildRequestSnapshot(batches map[string]*domain.BatchProcess, snapshot *dom
 		NumProcessed: numProcessed,
 		NumRecords:   numRecords,
 		Errors:       errRecs,
+		PauseCount:   snapshot.PauseCount,
+		SnapshotIdx:  snapshot.SnapshotIdx,
 	}
 }

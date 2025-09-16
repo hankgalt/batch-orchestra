@@ -163,5 +163,7 @@ type BatchSnapshot struct {
 	Done         bool
 	NumProcessed uint                     // number of batches processed
 	NumRecords   uint                     // number of records processed
+	PauseCount   uint                     // number of times the job was paused
+	SnapshotIdx  []uint64                 // snapshot indexes (offsets)
 	Errors       map[string][]ErrorRecord // map of batch ID to list of error records
 }
