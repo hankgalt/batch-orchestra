@@ -98,7 +98,7 @@ func SnapshotActivity[SS domain.SnapshotConfig](
 	l := activity.GetLogger(ctx)
 	l.Debug("SnapshotActivity started", "name", snapCfg.Name(), "job-id", result.JobID)
 
-	if slices.Contains(snapshot.SnapshotIdx, result.StartAt) {
+	if snapshot != nil && slices.Contains(snapshot.SnapshotIdx, result.StartAt) {
 		l.Info("snapshot already exists for this offset, skipping", "offset", result.StartAt)
 		return snapshot, nil
 	}
