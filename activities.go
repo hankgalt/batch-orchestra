@@ -141,6 +141,8 @@ func buildRequestSnapshot(batches map[string]*domain.BatchProcess, snapshot *dom
 	errRecs := map[string][]domain.ErrorRecord{}
 	numProcessed := uint(len(batches))
 	numRecords := uint(0)
+	pauseCount := uint(0)
+	snapshotIdx := []uint64{}
 
 	if snapshot != nil {
 		if snapshot.Errors != nil {
@@ -148,6 +150,8 @@ func buildRequestSnapshot(batches map[string]*domain.BatchProcess, snapshot *dom
 		}
 		numProcessed += snapshot.NumProcessed
 		numRecords += snapshot.NumRecords
+		pauseCount = snapshot.PauseCount
+		snapshotIdx = snapshot.SnapshotIdx
 	}
 
 	// Collect errors from batches
@@ -173,7 +177,7 @@ func buildRequestSnapshot(batches map[string]*domain.BatchProcess, snapshot *dom
 		NumProcessed: numProcessed,
 		NumRecords:   numRecords,
 		Errors:       errRecs,
-		PauseCount:   snapshot.PauseCount,
-		SnapshotIdx:  snapshot.SnapshotIdx,
+		PauseCount:   pauseCount,
+		SnapshotIdx:  snapshotIdx,
 	}
 }
