@@ -156,6 +156,7 @@ type BatchProcessingResult struct {
 	Done    bool                     // whether the job is done
 	Offsets []uint64                 // list of offsets for each batch
 	Batches map[string]*BatchProcess // map of batch by ID
+	Error   string                   // error message if any
 }
 
 type ErrorRecord struct {

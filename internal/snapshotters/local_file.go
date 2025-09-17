@@ -11,6 +11,14 @@ import (
 
 const LocalFileSnapshotter = "local-file-snapshotter"
 
+const (
+	ERR_MISSING_OBJECT_PATH = "local csv: missing object path"
+	ERR_MISSING_KEY         = "local csv: missing key"
+)
+
+var ErrMissingObjectPath = errors.New(ERR_MISSING_OBJECT_PATH)
+var ErrMissingKey = errors.New(ERR_MISSING_KEY)
+
 type localFileSnapshotter struct {
 	path string
 }
@@ -25,6 +33,13 @@ func (s localFileSnapshotter) Close(ctx context.Context) error {
 }
 
 func (s localFileSnapshotter) Snapshot(ctx context.Context, key string, snapshot any) error {
+	if s.path == "" {
+		return ErrMissingObjectPath
+	}
+	if key == "" {
+		return ErrMissingKey
+	}
+
 	// get current dir path
 	dir, err := os.Getwd()
 	if err != nil {
@@ -48,6 +63,10 @@ type LocalFileSnapshotterConfig struct {
 func (s LocalFileSnapshotterConfig) Name() string { return LocalFileSnapshotter }
 
 func (s LocalFileSnapshotterConfig) BuildSnapshotter(ctx context.Context) (domain.Snapshotter, error) {
+	if s.Path == "" {
+		return nil, ErrMissingObjectPath
+	}
+
 	return &localFileSnapshotter{
 		path: s.Path,
 	}, nil

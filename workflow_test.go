@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	"go.temporal.io/sdk/converter"
@@ -937,6 +939,196 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 
 }
 
+func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_TimeoutError(t *testing.T) {
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestWorkflowEnvironment()
+
+	l := logger.GetSlogLogger()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	ctx = logger.WithLogger(ctx, l)
+
+	env.SetWorkerOptions(worker.Options{
+		BackgroundActivityContext: ctx,
+		DeadlockDetectionTimeout:  6 * time.Hour, // set a long timeout to avoid deadlock detection during tests
+	})
+
+	env.SetTestTimeout(6 * time.Hour)
+
+	// Register the workflow
+	env.RegisterWorkflowWithOptions(
+		bo.ProcessBatchWorkflow[domain.CSVRow, sources.LocalCSVConfig, sinks.SQLLiteSinkConfig[domain.CSVRow], snapshotters.LocalFileSnapshotterConfig],
+		workflow.RegisterOptions{
+			Name: ProcessLocalCSVSQLLiteWorkflowAlias,
+		},
+	)
+
+	// Register activities.
+	env.RegisterActivityWithOptions(
+		bo.FetchNextActivity[domain.CSVRow, sources.LocalCSVConfig],
+		activity.RegisterOptions{
+			Name: FetchNextLocalCSVSourceBatchActivityAlias,
+		},
+	)
+	env.RegisterActivityWithOptions(
+		bo.WriteActivity[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]],
+		activity.RegisterOptions{
+			Name: WriteNextSQLLiteSinkBatchActivityAlias,
+		},
+	)
+	env.RegisterActivityWithOptions(
+		bo.SnapshotActivity[snapshotters.LocalFileSnapshotterConfig],
+		activity.RegisterOptions{
+			Name: SnapshotLocalFileBatchActivityAlias,
+		},
+	)
+
+	// Build source & sink configurations
+	// Source - local CSV
+	fileName := utils.BuildFileName()
+	filePath, err := utils.BuildFilePath()
+	require.NoError(t, err, "error building csv file path for test")
+	path := filepath.Join(filePath, fileName)
+	sourceCfg := sources.LocalCSVConfig{
+		Path:         path,
+		Delimiter:    '|',
+		HasHeader:    true,
+		MappingRules: domain.BuildBusinessModelTransformRules(),
+	}
+
+	// Sink - MongoDB
+	dbFile := "data/__deleteme.db"
+	dbClient, err := sqllite.NewSQLLiteDBClient(dbFile)
+	require.NoError(t, err)
+
+	defer func(cl *sqllite.SQLLiteDBClient, fpath string) {
+		ags, err := cl.FetchRecords(context.Background(), "agent", 0, 25)
+		require.NoError(t, err)
+		require.Equal(t, len(ags), 3)
+
+		require.NoError(t, cl.Close(ctx), "close db client")
+		require.NoError(t, os.Remove(fpath), "cleanup temp db file")
+	}(dbClient, dbFile)
+
+	res := dbClient.ExecuteSchema(sqllite.AgentSchema)
+	n, err := res.LastInsertId()
+	require.NoError(t, err)
+	require.Equal(t, int64(0), n)
+
+	sinkCfg := sinks.SQLLiteSinkConfig[domain.CSVRow]{
+		DBFile: dbFile,
+		Table:  "agent",
+	}
+
+	ssCfg := snapshotters.LocalFileSnapshotterConfig{
+		Path: filePath,
+	}
+
+	req := &LocalCSVSQLLiteBatchRequest{
+		JobID:               "job-local-csv-sqllite-timeout-error",
+		BatchSize:           400,
+		MaxInProcessBatches: 2,
+		PauseRecordCount:    5,
+		PauseDuration:       2 * time.Minute,
+		StartAt:             0,
+		Source:              sourceCfg,
+		Sink:                sinkCfg,
+		Snapshotter:         ssCfg,
+		Policies: map[string]domain.RetryPolicySpec{
+			domain.GetFetchActivityName(sourceCfg): {
+				MaximumAttempts:    3,
+				InitialInterval:    100 * time.Millisecond,
+				BackoffCoefficient: 2.0,
+				MaximumInterval:    5 * time.Second,
+				NonRetryableErrorTypes: []string{
+					sources.ErrMsgLocalCSVPathRequired,
+					sources.ErrMsgLocalCSVSizeMustBePositive,
+					sources.ErrMsgLocalCSVFileNotFound,
+					sources.ErrMsgLocalCSVTransformerNil,
+				},
+			},
+			domain.GetWriteActivityName(sinkCfg): {
+				MaximumAttempts:    5,
+				InitialInterval:    200 * time.Millisecond,
+				BackoffCoefficient: 1.5,
+				MaximumInterval:    10 * time.Second,
+				NonRetryableErrorTypes: []string{
+					sinks.ErrMsgSQLLiteSinkNil,
+					sinks.ErrMsgSQLLiteSinkNilClient,
+					sinks.ErrMsgSQLLiteSinkEmptyTable,
+					sinks.ErrMsgSQLLiteSinkDBFileRequired,
+					sqllite.ERR_SQLITE_DB_CONNECTION,
+				},
+			},
+			domain.GetSnapshotActivityName(ssCfg): {
+				MaximumAttempts:    3,
+				InitialInterval:    100 * time.Millisecond,
+				BackoffCoefficient: 2.0,
+				MaximumInterval:    15 * time.Minute,
+				NonRetryableErrorTypes: []string{
+					snapshotters.ERR_MISSING_OBJECT_PATH,
+					snapshotters.ERR_MISSING_KEY,
+				},
+			},
+		},
+	}
+
+	env.SetOnActivityStartedListener(
+		func(
+			activityInfo *activity.Info,
+			ctx context.Context,
+			args converter.EncodedValues,
+		) {
+			activityType := activityInfo.ActivityType.Name
+			if strings.HasPrefix(activityType, "internalSession") {
+				return
+			}
+
+			l.Debug(
+				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_TimeoutError - Activity started",
+				"activity-type", activityType,
+			)
+
+		},
+	)
+
+	env.OnActivity(
+		FetchNextLocalCSVSourceBatchActivityAlias,
+		mock.Anything, mock.Anything,
+	).Return(
+		func(
+			ctx context.Context,
+			in *domain.FetchInput[domain.CSVRow, sources.LocalCSVConfig],
+		) (*domain.FetchOutput[domain.CSVRow], error) {
+			if in.Offset >= 682 {
+				// return nil & activity timeout error
+				return nil, temporal.NewTimeoutError(enums.TIMEOUT_TYPE_START_TO_CLOSE, errors.New("simulated start to close timeout error for testing"))
+			}
+			return bo.FetchNextActivity(ctx, in)
+		},
+	)
+
+	defer func() {
+		if err := recover(); err != nil {
+			l.Error(
+				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_TimeoutError - panicked",
+				"workflow", ProcessLocalCSVSQLLiteWorkflowAlias,
+				"error", err,
+			)
+		}
+
+		err := env.GetWorkflowError()
+		require.Error(t, err, "workflow should error out due to activity timeout")
+		require.Contains(t, err.Error(), "simulated start to close timeout error for testing", "expected timeout error message")
+
+	}()
+
+	env.ExecuteWorkflow(ProcessLocalCSVSQLLiteWorkflowAlias, req)
+
+	require.True(t, env.IsWorkflowCompleted())
+
+}
+
 func Test_ProcessBatchWorkflow_Err_NonRetryable(t *testing.T) {
 	var suite testsuite.WorkflowTestSuite
 	env := suite.NewTestWorkflowEnvironment()
@@ -1159,6 +1351,8 @@ func Test_ProcessBatchWorkflow_Err_Retryable(t *testing.T) {
 
 	require.True(t, env.IsWorkflowCompleted())
 }
+
+// TODO add tests for pauseRecCount, pauseDuration
 
 func extractContinueAsNewInput[T any](err error, dc converter.DataConverter, out *T) (ok bool, _ error) {
 	var cae *workflow.ContinueAsNewError
