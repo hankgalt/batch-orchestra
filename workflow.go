@@ -2,6 +2,7 @@ package batch_orchestra
 
 import (
 	"container/list"
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"go.temporal.io/sdk/workflow"
 
 	"github.com/hankgalt/batch-orchestra/pkg/domain"
+	"github.com/hankgalt/batch-orchestra/pkg/utils"
 )
 
 const DEFAULT_PAUSE_RECORD_COUNT = uint(1000)
@@ -150,7 +152,7 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		req.Batches = map[string]*domain.BatchProcess{}
 	}
 	if req.Offsets == nil {
-		req.Offsets = []uint64{}
+		req.Offsets = []string{}
 		req.Offsets = append(req.Offsets, req.StartAt)
 	}
 	if req.MaxInProcessBatches < MinimumInProcessBatches {
@@ -236,7 +238,8 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 
 		// Update request state with fetched batch
 		req.Offsets = append(req.Offsets, fetched.Batch.NextOffset)
-		req.Batches[domain.GetBatchId(fetched.Batch.StartOffset, fetched.Batch.NextOffset, "", "")] = fetched.Batch
+		fetched.Batch.BatchId = domain.GetBatchId(fetched.Batch.StartOffset, fetched.Batch.NextOffset, "", "")
+		req.Batches[fetched.Batch.BatchId] = fetched.Batch
 		req.Done = fetched.Batch.Done
 
 		// Write first batch to sink (async) & push resulting future/promise to queue
@@ -300,7 +303,8 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 
 			// Update request state with fetched batch
 			req.Offsets = append(req.Offsets, fetched.Batch.NextOffset)
-			req.Batches[domain.GetBatchId(fetched.Batch.StartOffset, fetched.Batch.NextOffset, "", "")] = fetched.Batch
+			fetched.Batch.BatchId = domain.GetBatchId(fetched.Batch.StartOffset, fetched.Batch.NextOffset, "", "")
+			req.Batches[fetched.Batch.BatchId] = fetched.Batch
 			req.Done = fetched.Batch.Done
 
 			// Write next batch to sink (async) & push resulting future/promise to queue
@@ -381,6 +385,28 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		reqSnapshot := buildRequestSnapshot(req.Batches, req.Snapshot)
 		reqSnapshot.SnapshotIdx = append(reqSnapshot.SnapshotIdx, result.StartAt)
 		reqSnapshot.Done = req.Done
+
+		if p, ok := any(req.Source).(domain.HasSize); ok {
+			lastOffset := result.Offsets[len(result.Offsets)-1]
+
+			lastOffsetInt64, err := utils.ParseInt64(lastOffset)
+			if err != nil {
+				l.Error(
+					"processBatchWorkflow error converting last offset to int64",
+					"source", req.Source.Name(),
+					"sink", req.Sink.Name(),
+					"start-at", req.StartAt,
+					"workflow", wkflname,
+					"fetch-activity", fetchActivityAlias,
+					"write-activity", writeActivityAlias,
+					"snapshot-activity", snapshotActivityAlias,
+					"error", err.Error(),
+				)
+			}
+
+			reqSnapshot.DonePercentage = float32(lastOffsetInt64 / p.Size(context.Background()) * 100)
+			result.DonePercentage = reqSnapshot.DonePercentage
+		}
 
 		// Update request snapshot
 		req.Snapshot = reqSnapshot
@@ -604,7 +630,7 @@ func buildRequestSnapshot(batches map[string]*domain.BatchProcess, snapshot *dom
 	numProcessed := uint(len(batches))
 	numRecords := uint(0)
 	pauseCount := uint(0)
-	snapshotIdx := []uint64{}
+	snapshotIdx := []string{}
 
 	if snapshot != nil {
 		if snapshot.Errors != nil {

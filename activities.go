@@ -126,9 +126,9 @@ func SnapshotActivity[SS domain.SnapshotConfig](
 	}
 
 	// Build snapshot key
-	key := fmt.Sprintf("%s-%d", result.JobID, result.StartAt)
+	key := fmt.Sprintf("%s-%s", result.JobID, result.StartAt)
 	if isError {
-		key = fmt.Sprintf("%s-error-%d", result.JobID, result.StartAt)
+		key = fmt.Sprintf("%s-error-%s", result.JobID, result.StartAt)
 	}
 
 	// Save batch result summary snapshot

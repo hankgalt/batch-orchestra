@@ -12,6 +12,9 @@ import (
 	"github.com/hankgalt/batch-orchestra/pkg/utils"
 )
 
+// ReadCSVBatch reads a batch of CSV records from the provided data buffer.
+// It processes records up to the last complete line, applies the transformation function,
+// and returns a slice of BatchRecords along with the next offset.
 func ReadCSVBatch(
 	ctx context.Context,
 	data []byte,
@@ -20,9 +23,9 @@ func ReadCSVBatch(
 	delimiter rune,
 	hasHeader bool,
 	transFunc domain.TransformerFunc,
-) ([]*domain.BatchRecord, uint64, error) {
+) ([]*domain.BatchRecord, int64, error) {
 	if len(data) == 0 || numBytesRead == 0 {
-		return nil, uint64(offset), nil
+		return nil, offset, nil
 	}
 
 	// Set start index to the specified offset.
@@ -56,7 +59,7 @@ func ReadCSVBatch(
 		// allow cancellation
 		select {
 		case <-ctx.Done():
-			return records, uint64(offset) + uint64(nextOffset), ctx.Err()
+			return records, offset + nextOffset, ctx.Err()
 		default:
 		}
 
@@ -69,8 +72,8 @@ func ReadCSVBatch(
 			cleanedStr := utils.CleanRecord(string(data[nextOffset:csvReader.InputOffset()]))
 			if record, err := utils.ReadSingleRecord(cleanedStr); err != nil {
 				records = append(records, &domain.BatchRecord{
-					Start: uint64(nextOffset),
-					End:   uint64(csvReader.InputOffset()),
+					Start: utils.Int64ToString(nextOffset),
+					End:   utils.Int64ToString(csvReader.InputOffset()),
 					BatchResult: domain.BatchResult{
 						Error: fmt.Sprintf("read data row: %v", err),
 					},
@@ -118,8 +121,8 @@ func ReadCSVBatch(
 
 		// Create a BatchRecord for the current csv record
 		br := domain.BatchRecord{
-			Start: uint64(startIndex),
-			End:   uint64(csvReader.InputOffset()),
+			Start: utils.Int64ToString(startIndex),
+			End:   utils.Int64ToString(csvReader.InputOffset()),
 			Data:  row,
 		}
 
@@ -137,9 +140,12 @@ func ReadCSVBatch(
 
 	}
 
-	return records, uint64(offset) + uint64(nextOffset), nil
+	return records, offset + nextOffset, nil
 }
 
+// ReadCSVStream reads CSV records from the provided data buffer in a streaming fashion.
+// It processes records up to the last complete line, applies the transformation function,
+// and sends BatchRecords to the provided channel as they are processed.
 func ReadCSVStream(
 	ctx context.Context,
 	data []byte,
@@ -197,8 +203,8 @@ func ReadCSVStream(
 			record, err := utils.ReadSingleRecord(cleanedStr)
 			if err != nil {
 				resStream <- &domain.BatchRecord{
-					Start: uint64(nextOffset),
-					End:   uint64(csvReader.InputOffset()),
+					Start: utils.Int64ToString(nextOffset),
+					End:   utils.Int64ToString(csvReader.InputOffset()),
 					BatchResult: domain.BatchResult{
 						Error: fmt.Sprintf("read data row: %v", err),
 					},
@@ -255,8 +261,8 @@ func ReadCSVStream(
 		}
 
 		resStream <- &domain.BatchRecord{
-			Start: uint64(startIndex),
-			End:   uint64(csvReader.InputOffset()),
+			Start: utils.Int64ToString(startIndex),
+			End:   utils.Int64ToString(csvReader.InputOffset()),
 			Data:  row,
 		}
 	}

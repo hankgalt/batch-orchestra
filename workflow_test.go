@@ -163,7 +163,7 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_SQLLi
 			JobID:               "job-cloud-csv-sqllite-happy",
 			BatchSize:           400,
 			MaxInProcessBatches: 2,
-			StartAt:             0,
+			StartAt:             "0",
 			Source:              sourceCfg,
 			Sink:                sinkCfg,
 			Snapshotter:         ssCfg,
@@ -326,7 +326,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError(t *testing.T)
 		BatchSize:           400,
 		MaxInProcessBatches: 2,
 		MaxBatches:          6,
-		StartAt:             0,
+		StartAt:             "0",
 		Source:              sourceCfg,
 		Sink:                sinkCfg,
 		Snapshotter:         ssCfg,
@@ -488,7 +488,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath_Server(t *testing.T) {
 		BatchSize:           400,
 		MaxInProcessBatches: 3,
 		MaxBatches:          3,
-		StartAt:             0,
+		StartAt:             "0",
 		Source:              sourceCfg,
 		Sink:                sinkCfg,
 		Snapshotter:         ssCfg,
@@ -666,7 +666,7 @@ func Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 		JobID:               "job-temp-local-csv-sqllite-happy",
 		BatchSize:           200,
 		MaxInProcessBatches: 2,
-		StartAt:             0,
+		StartAt:             "0",
 		Source:              sourceCfg,
 		Sink:                sinkCfg,
 		Snapshotter:         ssCfg,
@@ -847,7 +847,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 		JobID:               "job-local-csv-sqllite-happy",
 		BatchSize:           400,
 		MaxInProcessBatches: 2,
-		StartAt:             0,
+		StartAt:             "0",
 		Source:              sourceCfg,
 		Sink:                sinkCfg,
 		Snapshotter:         ssCfg,
@@ -1030,7 +1030,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_TimeoutError(t *testing.T) {
 		MaxInProcessBatches: 2,
 		PauseRecordCount:    5,
 		PauseDuration:       2 * time.Minute,
-		StartAt:             0,
+		StartAt:             "0",
 		Source:              sourceCfg,
 		Sink:                sinkCfg,
 		Snapshotter:         ssCfg,
@@ -1100,7 +1100,12 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_TimeoutError(t *testing.T) {
 			ctx context.Context,
 			in *domain.FetchInput[domain.CSVRow, sources.LocalCSVConfig],
 		) (*domain.FetchOutput[domain.CSVRow], error) {
-			if in.Offset >= 682 {
+			offsetInt, err := utils.ParseInt64(in.Offset)
+			if err != nil {
+				return nil, err
+			}
+
+			if offsetInt >= 682 {
 				// return nil & activity timeout error
 				return nil, temporal.NewTimeoutError(enums.TIMEOUT_TYPE_START_TO_CLOSE, errors.New("simulated start to close timeout error for testing"))
 			}
@@ -1176,7 +1181,7 @@ func Test_ProcessBatchWorkflow_Err_NonRetryable(t *testing.T) {
 		JobID:               "job-retryable-error",
 		BatchSize:           400,
 		MaxInProcessBatches: 2,
-		StartAt:             0,
+		StartAt:             "0",
 		Source:              sourceCfg,
 		Sink:                sinkCfg,
 		Policies: map[string]domain.RetryPolicySpec{
@@ -1288,7 +1293,7 @@ func Test_ProcessBatchWorkflow_Err_Retryable(t *testing.T) {
 		JobID:               "job-retryable-error",
 		BatchSize:           400,
 		MaxInProcessBatches: 2,
-		StartAt:             0,
+		StartAt:             "0",
 		Source:              sourceCfg,
 		Sink:                sinkCfg,
 		Policies: map[string]domain.RetryPolicySpec{
@@ -1407,7 +1412,7 @@ type fakeSource struct{}
 
 func (s *fakeSource) Name() string                    { return FakeSource }
 func (s *fakeSource) Close(ctx context.Context) error { return nil }
-func (s *fakeSource) Next(ctx context.Context, offset uint64, size uint) (*domain.BatchProcess, error) {
+func (s *fakeSource) Next(ctx context.Context, offset string, size uint) (*domain.BatchProcess, error) {
 	if ctx != nil {
 		if fail, ok := ctx.Value("fail-next").(bool); ok && fail {
 			return nil, errors.New(ErrMsgSourceNext)

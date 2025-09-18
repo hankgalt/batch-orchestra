@@ -18,20 +18,20 @@ func GetSnapshotActivityName(snapCfg SnapshotConfig) string {
 	return "snapshot-" + snapCfg.Name() + "-batch-activity-alias"
 }
 
-func GetBatchId(start, end uint64, prefix, suffix string) string {
+func GetBatchId(start, end string, prefix, suffix string) string {
 	if prefix == "" && suffix == "" {
-		return fmt.Sprintf("batch-%d-%d", start, end)
+		return fmt.Sprintf("batch-%s-%s", start, end)
 	}
 
 	if prefix != "" && suffix != "" {
-		return fmt.Sprintf("%s-%d-%d-%s", prefix, start, end, suffix)
+		return fmt.Sprintf("%s-%s-%s-%s", prefix, start, end, suffix)
 	}
 
 	if prefix != "" {
-		return fmt.Sprintf("%s-%d-%d", prefix, start, end)
+		return fmt.Sprintf("%s-%s-%s", prefix, start, end)
 	}
 
-	return fmt.Sprintf("%d-%d-%s", start, end, suffix)
+	return fmt.Sprintf("%s-%s-%s", start, end, suffix)
 }
 
 // BuildTransformerWithRules creates a transformer function based on the provided headers and rules.

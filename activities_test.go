@@ -40,7 +40,7 @@ type ETLRequest[T any] struct {
 	MaxBatches uint
 	BatchSize  uint
 	Done       bool
-	Offsets    []uint64
+	Offsets    []string
 	Batches    map[string]*domain.BatchProcess
 }
 
@@ -89,7 +89,7 @@ func Test_FetchNext_LocalTempCSV(t *testing.T) {
 	// initialize batch size & next offset
 	// Use a batch size larger than the largest row size in bytes to ensure more than one row is fetched.
 	batchSize := uint(30)
-	nextOffset := uint64(0)
+	nextOffset := "0"
 
 	fIn := &domain.FetchInput[domain.CSVRow, sources.LocalCSVConfig]{
 		Source:    cfg,
@@ -117,7 +117,14 @@ func Test_FetchNext_LocalTempCSV(t *testing.T) {
 		val, err := env.ExecuteActivity(FetchNextLocalCSVSourceBatchActivityAlias, fIn)
 		require.NoError(t, err)
 		require.NoError(t, val.Get(&out))
-		require.Equal(t, true, out.Batch.NextOffset > 0, "next offset should be greater than 0")
+
+		nOffset, err := utils.ParseInt64(out.Batch.NextOffset)
+		require.NoError(t, err)
+
+		sOffset, err := utils.ParseInt64(nextOffset)
+		require.NoError(t, err)
+
+		require.Equal(t, true, nOffset > sOffset, "next offset should be greater than start offset")
 	}
 
 	require.True(t, out.Batch.Done)
@@ -161,7 +168,7 @@ func Test_FetchNext_LocalCSV(t *testing.T) {
 	}
 
 	batchSize := uint(400) // larger than the largest row size in bytes
-	nextOffset := uint64(0)
+	nextOffset := "0"
 
 	fIn := &domain.FetchInput[domain.CSVRow, sources.LocalCSVConfig]{
 		Source:    cfg,
@@ -173,7 +180,14 @@ func Test_FetchNext_LocalCSV(t *testing.T) {
 
 	var out domain.FetchOutput[domain.CSVRow]
 	require.NoError(t, val.Get(&out))
-	require.Equal(t, true, out.Batch.NextOffset > 0, "next offset should be greater than 0")
+
+	nOffset, err := utils.ParseInt64(out.Batch.NextOffset)
+	require.NoError(t, err)
+
+	sOffset, err := utils.ParseInt64(nextOffset)
+	require.NoError(t, err)
+
+	require.Equal(t, true, nOffset > sOffset, "next offset should be greater than start offset")
 
 	for out.Batch.Done == false {
 		fIn = &domain.FetchInput[domain.CSVRow, sources.LocalCSVConfig]{
@@ -185,7 +199,14 @@ func Test_FetchNext_LocalCSV(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, val.Get(&out))
-		require.Equal(t, true, out.Batch.NextOffset > 0, "next offset should be greater than 0")
+
+		nOffset, err := utils.ParseInt64(out.Batch.NextOffset)
+		require.NoError(t, err)
+
+		sOffset, err := utils.ParseInt64(nextOffset)
+		require.NoError(t, err)
+
+		require.Equal(t, true, nOffset > sOffset, "next offset should be greater than start offset")
 	}
 }
 
@@ -226,7 +247,7 @@ func Test_FetchNext_CloudCSV(t *testing.T) {
 	}
 
 	batchSize := uint(400) // larger than the largest row size in bytes
-	nextOffset := uint64(0)
+	nextOffset := "0"
 
 	fIn := &domain.FetchInput[domain.CSVRow, sources.CloudCSVConfig]{
 		Source:    cfg,
@@ -238,7 +259,13 @@ func Test_FetchNext_CloudCSV(t *testing.T) {
 
 	var out domain.FetchOutput[domain.CSVRow]
 	require.NoError(t, val.Get(&out))
-	require.Equal(t, true, out.Batch.NextOffset > 0, "next offset should be greater than 0")
+	nOffset, err := utils.ParseInt64(out.Batch.NextOffset)
+	require.NoError(t, err)
+
+	sOffset, err := utils.ParseInt64(nextOffset)
+	require.NoError(t, err)
+
+	require.Equal(t, true, nOffset > sOffset, "next offset should be greater than start offset")
 
 	for out.Batch.Done == false {
 		fIn = &domain.FetchInput[domain.CSVRow, sources.CloudCSVConfig]{
@@ -250,7 +277,13 @@ func Test_FetchNext_CloudCSV(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, val.Get(&out))
-		require.Equal(t, true, out.Batch.NextOffset > 0, "next offset should be greater than 0")
+		nOffset, err := utils.ParseInt64(out.Batch.NextOffset)
+		require.NoError(t, err)
+
+		sOffset, err := utils.ParseInt64(nextOffset)
+		require.NoError(t, err)
+
+		require.Equal(t, true, nOffset > sOffset, "next offset should be greater than start offset")
 	}
 }
 
@@ -276,19 +309,19 @@ func Test_Write_NoopSink(t *testing.T) {
 
 	recs := []*domain.BatchRecord{
 		{
-			Start: 0,
-			End:   10,
+			Start: "0",
+			End:   "10",
 			Data:  domain.CSVRow{"id": "1", "name": "alpha"},
 		},
 		{
-			Start: 10,
-			End:   20,
+			Start: "10",
+			End:   "20",
 			Data:  domain.CSVRow{"id": "2", "name": "beta"},
 		},
 	}
 	b := &domain.BatchProcess{
 		Records:    recs,
-		NextOffset: 30,
+		NextOffset: "30",
 		Done:       false,
 	}
 
@@ -344,8 +377,8 @@ func Test_Write_SQLLiteSink(t *testing.T) {
 
 	recs := []*domain.BatchRecord{
 		{
-			Start: 0,
-			End:   10,
+			Start: "0",
+			End:   "10",
 			Data: domain.CSVRow{
 				"entity_id":   "1",
 				"entity_name": "Entity 1",
@@ -355,8 +388,8 @@ func Test_Write_SQLLiteSink(t *testing.T) {
 			},
 		},
 		{
-			Start: 10,
-			End:   20,
+			Start: "10",
+			End:   "20",
 			Data: domain.CSVRow{
 				"entity_id":   "2",
 				"entity_name": "Entity 2",
@@ -369,7 +402,7 @@ func Test_Write_SQLLiteSink(t *testing.T) {
 
 	b := &domain.BatchProcess{
 		Records:    recs,
-		NextOffset: 30,
+		NextOffset: "30",
 		Done:       false,
 	}
 
@@ -470,11 +503,11 @@ func Test_FetchAndWrite_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 		MaxBatches: 2,
 		BatchSize:  400,
 		Done:       false,
-		Offsets:    []uint64{},
+		Offsets:    []string{},
 		Batches:    map[string]*domain.BatchProcess{},
 	}
 
-	etlReq.Offsets = append(etlReq.Offsets, uint64(0))
+	etlReq.Offsets = append(etlReq.Offsets, "0")
 
 	// initiate a new queue
 	q := list.New()
@@ -531,7 +564,7 @@ func Test_FetchAndWrite_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 
 			etlReq.Done = fOut.Batch.Done
 			etlReq.Offsets = append(etlReq.Offsets, fOut.Batch.NextOffset)
-			etlReq.Batches[fmt.Sprintf("batch-%d-%d", fOut.Batch.StartOffset, fOut.Batch.NextOffset)] = fOut.Batch
+			etlReq.Batches[fmt.Sprintf("batch-%s-%s", fOut.Batch.StartOffset, fOut.Batch.NextOffset)] = fOut.Batch
 
 			wIn = &domain.WriteInput[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]]{
 				Sink:  sinkCfg,
@@ -555,7 +588,7 @@ func Test_FetchAndWrite_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 			require.NoError(t, wVal.Get(&wOut))
 			require.Equal(t, true, len(wOut.Batch.Records) > 0)
 
-			batchId := fmt.Sprintf("batch-%d-%d", wOut.Batch.StartOffset, wOut.Batch.NextOffset)
+			batchId := fmt.Sprintf("batch-%s-%s", wOut.Batch.StartOffset, wOut.Batch.NextOffset)
 			if _, ok := etlReq.Batches[batchId]; !ok {
 				etlReq.Batches[batchId] = wOut.Batch
 			} else {
@@ -660,11 +693,11 @@ func Test_FetchAndWrite_Temp_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 		MaxBatches: 2,
 		BatchSize:  200,
 		Done:       false,
-		Offsets:    []uint64{},
+		Offsets:    []string{},
 		Batches:    map[string]*domain.BatchProcess{},
 	}
 
-	etlReq.Offsets = append(etlReq.Offsets, uint64(0))
+	etlReq.Offsets = append(etlReq.Offsets, "0")
 
 	// initiate a new queue
 	q := list.New()
@@ -721,7 +754,7 @@ func Test_FetchAndWrite_Temp_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 
 			etlReq.Done = fOut.Batch.Done
 			etlReq.Offsets = append(etlReq.Offsets, fOut.Batch.NextOffset)
-			etlReq.Batches[fmt.Sprintf("batch-%d-%d", fOut.Batch.StartOffset, fOut.Batch.NextOffset)] = fOut.Batch
+			etlReq.Batches[fmt.Sprintf("batch-%s-%s", fOut.Batch.StartOffset, fOut.Batch.NextOffset)] = fOut.Batch
 
 			wIn = &domain.WriteInput[domain.CSVRow, sinks.SQLLiteSinkConfig[domain.CSVRow]]{
 				Sink:  sinkCfg,
@@ -745,7 +778,7 @@ func Test_FetchAndWrite_Temp_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 			require.NoError(t, wVal.Get(&wOut))
 			require.Equal(t, true, len(wOut.Batch.Records) > 0)
 
-			batchId := fmt.Sprintf("batch-%d-%d", wOut.Batch.StartOffset, wOut.Batch.NextOffset)
+			batchId := fmt.Sprintf("batch-%s-%s", wOut.Batch.StartOffset, wOut.Batch.NextOffset)
 			if _, ok := etlReq.Batches[batchId]; !ok {
 				etlReq.Batches[batchId] = wOut.Batch
 			} else {

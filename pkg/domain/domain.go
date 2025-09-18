@@ -15,7 +15,7 @@ type BatchResult struct {
 
 type BatchRecord struct {
 	Data        any
-	Start, End  uint64
+	Start, End  string
 	BatchResult BatchResult
 	Done        bool
 }
@@ -24,8 +24,8 @@ type BatchRecord struct {
 type BatchProcess struct {
 	BatchId     string
 	Records     []*BatchRecord
-	StartOffset uint64 // start offset in the source
-	NextOffset  uint64 // cursor / next-page token / byte offset
+	StartOffset string // start offset in the source
+	NextOffset  string // cursor / next-page token / byte offset
 	Error       string
 	Done        bool
 }
@@ -39,14 +39,18 @@ type SourceConfig[T any] interface {
 // Source[T any] is a source of batches of T, e.g., a CSV file, a database table, etc.
 // Pulls the next batch given an offset; return next offset.
 type Source[T any] interface {
-	Next(ctx context.Context, offset uint64, n uint) (*BatchProcess, error)
+	Next(ctx context.Context, offset string, n uint) (*BatchProcess, error)
 	Name() string
 	Close(context.Context) error
 }
 
 // NextStreamer[T any] is an interface for streaming the next batch of records.
 type NextStreamer[T any] interface {
-	NextStream(ctx context.Context, offset uint64, n uint) (<-chan *BatchRecord, error)
+	NextStream(ctx context.Context, offset string, n uint) (<-chan *BatchRecord, error)
+}
+
+type HasSize interface {
+	Size(ctx context.Context) int64
 }
 
 // SinkConfig[T any] is a config that *knows how to build* a Sink for a specific T.
@@ -76,7 +80,7 @@ type Snapshotter interface {
 
 // WriteStreamer[T any] is an interface for streaming writes of batches of T.
 type WriteStreamer[T any] interface {
-	WriteStream(ctx context.Context, start uint64, data []T) (<-chan BatchResult, error)
+	WriteStream(ctx context.Context, start string, data []T) (<-chan BatchResult, error)
 }
 
 // WriteInput[T any, D SinkConfig[T]] is the input for the WriteActivity.
@@ -93,7 +97,7 @@ type WriteOutput[T any] struct {
 // FetchInput[T any, S SourceConfig[T]] is the input for the FetchNextActivity.
 type FetchInput[T any, S SourceConfig[T]] struct {
 	Source    S
-	Offset    uint64
+	Offset    string
 	BatchSize uint
 }
 
@@ -117,9 +121,9 @@ type BatchProcessingRequest[T any, S SourceConfig[T], D SinkConfig[T], SS Snapsh
 	Sink        D  // sink configuration
 	Snapshotter SS // snapshotter configuration
 
-	StartAt  uint64                   // initial offset
+	StartAt  string                   // initial offset
 	Done     bool                     // whether the job is done
-	Offsets  []uint64                 // list of offsets for each batch
+	Offsets  []string                 // list of offsets for each batch
 	Batches  map[string]*BatchProcess // map of batch by ID
 	Snapshot *BatchSnapshot           // Processed snapshot
 }
@@ -151,24 +155,26 @@ type RetryPolicySpec struct {
 // BatchProcessingResult
 // is a result snapshot a batch of T
 type BatchProcessingResult struct {
-	JobID   string                   // unique identifier for the job
-	StartAt uint64                   // initial offset
-	Done    bool                     // whether the job is done
-	Offsets []uint64                 // list of offsets for each batch
-	Batches map[string]*BatchProcess // map of batch by ID
-	Error   string                   // error message if any
+	JobID          string                   // unique identifier for the job
+	StartAt        string                   // initial offset
+	Done           bool                     // whether the job is done
+	Offsets        []string                 // list of offsets for each batch
+	Batches        map[string]*BatchProcess // map of batch by ID
+	Error          string                   // error message if any
+	DonePercentage float32                  // percentage of batches done
 }
 
 type ErrorRecord struct {
-	Start, End uint64
+	Start, End string
 	Error      string
 }
 
 type BatchSnapshot struct {
-	Done         bool
-	NumProcessed uint                     // number of batches processed
-	NumRecords   uint                     // number of records processed
-	PauseCount   uint                     // number of times the job was paused
-	SnapshotIdx  []uint64                 // snapshot indexes (offsets)
-	Errors       map[string][]ErrorRecord // map of batch ID to list of error records
+	Done           bool
+	NumProcessed   uint                     // number of batches processed
+	NumRecords     uint                     // number of records processed
+	PauseCount     uint                     // number of times the job was paused
+	SnapshotIdx    []string                 // snapshot indexes (offsets)
+	Errors         map[string][]ErrorRecord // map of batch ID to list of error records
+	DonePercentage float32                  // percentage of batches done
 }
