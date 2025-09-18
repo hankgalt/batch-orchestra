@@ -50,7 +50,7 @@ type NextStreamer[T any] interface {
 }
 
 type HasSize interface {
-	Size(ctx context.Context) int64
+	Size() int64
 }
 
 // SinkConfig[T any] is a config that *knows how to build* a Sink for a specific T.

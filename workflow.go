@@ -2,7 +2,6 @@ package batch_orchestra
 
 import (
 	"container/list"
-	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -386,26 +385,29 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		reqSnapshot.SnapshotIdx = append(reqSnapshot.SnapshotIdx, result.StartAt)
 		reqSnapshot.Done = req.Done
 
+		// update done percentage if source has size
 		if p, ok := any(req.Source).(domain.HasSize); ok {
-			lastOffset := result.Offsets[len(result.Offsets)-1]
+			if p.Size() > 0 && len(result.Offsets) > 0 {
+				lastOffset := result.Offsets[len(result.Offsets)-1]
 
-			lastOffsetInt64, err := utils.ParseInt64(lastOffset)
-			if err != nil {
-				l.Error(
-					"processBatchWorkflow error converting last offset to int64",
-					"source", req.Source.Name(),
-					"sink", req.Sink.Name(),
-					"start-at", req.StartAt,
-					"workflow", wkflname,
-					"fetch-activity", fetchActivityAlias,
-					"write-activity", writeActivityAlias,
-					"snapshot-activity", snapshotActivityAlias,
-					"error", err.Error(),
-				)
+				lastOffsetInt64, err := utils.ParseInt64(lastOffset)
+				if err != nil {
+					l.Error(
+						"processBatchWorkflow error converting last offset to int64",
+						"source", req.Source.Name(),
+						"sink", req.Sink.Name(),
+						"start-at", req.StartAt,
+						"workflow", wkflname,
+						"fetch-activity", fetchActivityAlias,
+						"write-activity", writeActivityAlias,
+						"snapshot-activity", snapshotActivityAlias,
+						"error", err.Error(),
+					)
+				}
+
+				reqSnapshot.DonePercentage = float32(lastOffsetInt64 / p.Size() * 100)
+				result.DonePercentage = reqSnapshot.DonePercentage
 			}
-
-			reqSnapshot.DonePercentage = float32(lastOffsetInt64 / p.Size(context.Background()) * 100)
-			result.DonePercentage = reqSnapshot.DonePercentage
 		}
 
 		// Update request snapshot

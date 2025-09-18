@@ -77,7 +77,6 @@ type cloudCSVSource struct {
 	provider  string // e.g., "s3", "gcs"
 	path      string
 	bucket    string
-	size      int64
 	delimiter rune
 	hasHeader bool
 	transFunc domain.TransformerFunc // transformer function to apply to each row
@@ -292,13 +291,17 @@ type CloudCSVConfig struct {
 	Delimiter    rune // e.g., ',', '|'
 	HasHeader    bool
 	MappingRules map[string]domain.Rule
+	size         int64 // size of the CSV file in bytes
 }
 
 // Name of the source.
-func (c CloudCSVConfig) Name() string { return CloudCSVSource }
+func (c *CloudCSVConfig) Name() string { return CloudCSVSource }
+
+// Size returns the size of the local CSV file.
+func (c *CloudCSVConfig) Size() int64 { return c.size }
 
 // BuildSource builds a cloud CSV source from the config.
-func (c CloudCSVConfig) BuildSource(ctx context.Context) (domain.Source[domain.CSVRow], error) {
+func (c *CloudCSVConfig) BuildSource(ctx context.Context) (domain.Source[domain.CSVRow], error) {
 	// build s3/gcs/azure client from c.Provider, bucket, key
 
 	if c.Path == "" {
@@ -354,7 +357,7 @@ func (c CloudCSVConfig) BuildSource(ctx context.Context) (domain.Source[domain.C
 			}
 			return nil, ErrCloudCSVSizeMustBePositive
 		}
-		src.size = attrs.Size
+		c.size = attrs.Size
 	}
 
 	if c.HasHeader {

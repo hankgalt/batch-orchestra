@@ -24,15 +24,15 @@ type localFileSnapshotter struct {
 }
 
 // Name of the snapshotter.
-func (s localFileSnapshotter) Name() string { return LocalFileSnapshotter }
+func (s *localFileSnapshotter) Name() string { return LocalFileSnapshotter }
 
 // Close closes the local file snapshotter.
-func (s localFileSnapshotter) Close(ctx context.Context) error {
+func (s *localFileSnapshotter) Close(ctx context.Context) error {
 	// No resources to close for local file snapshotter
 	return nil
 }
 
-func (s localFileSnapshotter) Snapshot(ctx context.Context, key string, snapshot any) error {
+func (s *localFileSnapshotter) Snapshot(ctx context.Context, key string, snapshot any) error {
 	if s.path == "" {
 		return ErrMissingObjectPath
 	}
@@ -60,9 +60,9 @@ type LocalFileSnapshotterConfig struct {
 }
 
 // Name of the snapshotter.
-func (s LocalFileSnapshotterConfig) Name() string { return LocalFileSnapshotter }
+func (s *LocalFileSnapshotterConfig) Name() string { return LocalFileSnapshotter }
 
-func (s LocalFileSnapshotterConfig) BuildSnapshotter(ctx context.Context) (domain.Snapshotter, error) {
+func (s *LocalFileSnapshotterConfig) BuildSnapshotter(ctx context.Context) (domain.Snapshotter, error) {
 	if s.Path == "" {
 		return nil, ErrMissingObjectPath
 	}

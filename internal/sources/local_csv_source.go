@@ -33,7 +33,6 @@ var (
 // Local CSV source.
 type localCSVSource struct {
 	path      string
-	size      int64
 	delimiter rune
 	hasHeader bool
 	transFunc domain.TransformerFunc // transformer function to apply to each row
@@ -46,11 +45,6 @@ func (s *localCSVSource) Name() string { return LocalCSVSource }
 func (s *localCSVSource) Close(ctx context.Context) error {
 	// No resources to close for local CSV source
 	return nil
-}
-
-// Size returns the size of the local CSV file.
-func (s *localCSVSource) Size(ctx context.Context) int64 {
-	return s.size
 }
 
 // Next reads the next batch of CSV rows from the local file.
@@ -208,14 +202,20 @@ type LocalCSVConfig struct {
 	Delimiter    rune // e.g., ',', '|'
 	HasHeader    bool
 	MappingRules map[string]domain.Rule // mapping rules for the CSV rows
+	size         int64
 }
 
 // Name of the source.
-func (c LocalCSVConfig) Name() string { return LocalCSVSource }
+func (c *LocalCSVConfig) Name() string { return LocalCSVSource }
+
+// Size returns the size of the local CSV file.
+func (c *LocalCSVConfig) Size() int64 {
+	return c.size
+}
 
 // BuildSource builds a local CSV source from the config.
 // It reads headers if HasHeader is true and caches it.
-func (c LocalCSVConfig) BuildSource(
+func (c *LocalCSVConfig) BuildSource(
 	ctx context.Context,
 ) (domain.Source[domain.CSVRow], error) {
 	if c.Path == "" {
@@ -233,6 +233,12 @@ func (c LocalCSVConfig) BuildSource(
 		hasHeader: c.HasHeader,
 	}
 
+	if fileInfo, err := os.Stat(c.Path); err != nil {
+		fmt.Printf("Error getting file info: %v\n", err)
+	} else {
+		c.size = fileInfo.Size()
+	}
+
 	// If CSV file has headers, set cleaned headers.
 	if c.HasHeader {
 		f, err := os.Open(c.Path)
@@ -241,12 +247,6 @@ func (c LocalCSVConfig) BuildSource(
 			return nil, ErrLocalCSVFileNotFound
 		}
 		defer f.Close()
-
-		if fileInfo, err := os.Stat(c.Path); err != nil {
-			fmt.Printf("Error getting file info: %v\n", err)
-		} else {
-			src.size = fileInfo.Size()
-		}
 
 		r := csv.NewReader(f)
 		r.Comma = delim

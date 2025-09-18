@@ -57,9 +57,9 @@ func (s *noopSink[T]) Close(ctx context.Context) error {
 type NoopSinkConfig[T any] struct{}
 
 // Name of the sink.
-func (c NoopSinkConfig[T]) Name() string { return NoopSink }
+func (c *NoopSinkConfig[T]) Name() string { return NoopSink }
 
 // BuildSink returns a noop sink.
-func (c NoopSinkConfig[T]) BuildSink(ctx context.Context) (domain.Sink[T], error) {
+func (c *NoopSinkConfig[T]) BuildSink(ctx context.Context) (domain.Sink[T], error) {
 	return &noopSink[T]{}, nil
 }

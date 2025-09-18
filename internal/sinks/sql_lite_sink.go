@@ -105,10 +105,10 @@ type SQLLiteSinkConfig[T any] struct {
 }
 
 // Name of the sink.
-func (c SQLLiteSinkConfig[T]) Name() string { return SQLLiteSink }
+func (c *SQLLiteSinkConfig[T]) Name() string { return SQLLiteSink }
 
 // BuildSink builds a SQLLite sink from the config.
-func (c SQLLiteSinkConfig[T]) BuildSink(ctx context.Context) (domain.Sink[T], error) {
+func (c *SQLLiteSinkConfig[T]) BuildSink(ctx context.Context) (domain.Sink[T], error) {
 	if c.DBFile == "" {
 		return nil, ErrSQLLiteSinkDBFileRequired
 	}
