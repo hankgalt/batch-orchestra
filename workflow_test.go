@@ -180,41 +180,25 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_SQLLi
 					return
 				}
 
-				l.Debug(
-					"Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - Activity started",
-					"activityType", activityType,
-				)
+				l.Debug("Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - Activity started", "activityType", activityType)
 
 			})
 
 		defer func() {
 			if err := recover(); err != nil {
-				l.Error(
-					"Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - panicked",
-					"workflow", ProcessCloudCSVSQLLiteWorkflowAlias, "error", err,
-				)
+				l.Error("Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - panicked", "workflow", ProcessCloudCSVSQLLiteWorkflowAlias, "error", err)
 			}
 
 			err := s.env.GetWorkflowError()
 			if err != nil {
-				l.Error(
-					"Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - error",
-					"workflow", ProcessCloudCSVSQLLiteWorkflowAlias, "error", err,
-				)
+				l.Error("Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - error", "workflow", ProcessCloudCSVSQLLiteWorkflowAlias, "error", err)
 			} else {
 				var result CloudCSVSQLLiteBatchRequest
 				err := s.env.GetWorkflowResult(&result)
 				if err != nil {
-					l.Error(
-						"Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - error",
-						"workflow", ProcessCloudCSVSQLLiteWorkflowAlias, "error", err,
-					)
+					l.Error("Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - error", "workflow", ProcessCloudCSVSQLLiteWorkflowAlias, "error", err)
 				} else {
-					l.Debug(
-						"Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - success",
-						"num-batches-processed", result.Snapshot.NumBatches,
-						"num-records-processed", result.Snapshot.NumRecords,
-					)
+					l.Debug("Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - success", "num-batches-processed", result.Snapshot.NumBatches, "num-records-processed", result.Snapshot.NumRecords)
 
 					s.EqualValues(10, result.Snapshot.NumBatches)
 					errorCount := 0
@@ -343,20 +327,13 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError(t *testing.T)
 				return
 			}
 
-			l.Debug(
-				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError - Activity started",
-				"activity-type", activityType,
-			)
+			l.Debug("Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError - Activity started", "activity-type", activityType)
 
 		})
 
 	defer func() {
 		if err := recover(); err != nil {
-			l.Error(
-				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError - panicked",
-				"workflow", ProcessLocalCSVSQLLiteWorkflowAlias,
-				"error", err,
-			)
+			l.Error("Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError - panicked", "workflow", ProcessLocalCSVSQLLiteWorkflowAlias, "error", err)
 		}
 
 		err := env.GetWorkflowError()
@@ -550,12 +527,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath_Server(t *testing.T) {
 	require.EqualValues(t, 20, result.Snapshot.NumRecords)
 	require.EqualValues(t, 0, errorCount)
 
-	l.Debug("Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath_Server - workflow completed successfully",
-		"workflow-id", run.GetID(),
-		"workflow-run-id", run.GetRunID(),
-		"num-batches-processed", result.Snapshot.NumBatches,
-		"num-records-processed", result.Snapshot.NumRecords,
-	)
+	l.Debug("Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath_Server - workflow completed successfully", "workflow-id", run.GetID(), "workflow-run-id", run.GetRunID(), "num-batches-processed", result.Snapshot.NumBatches, "num-records-processed", result.Snapshot.NumRecords)
 }
 
 func Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath(t *testing.T) {
@@ -710,37 +682,23 @@ func Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 				return
 			}
 
-			l.Debug(
-				"Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath - Activity started",
-				"activity-type", activityType,
-			)
+			l.Debug("Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath - Activity started", "activity-type", activityType)
 
 		})
 
 	defer func() {
 		if err := recover(); err != nil {
-			l.Error(
-				"Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath - panicked",
-				"workflow", ProcessLocalCSVSQLLiteWorkflowAlias,
-				"error", err,
-			)
+			l.Error("Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath - panicked", "workflow", ProcessLocalCSVSQLLiteWorkflowAlias, "error", err)
 		}
 
 		err := env.GetWorkflowError()
 		if err != nil {
-			l.Error(
-				"Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath - error",
-				"error", err.Error(),
-			)
+			l.Error("Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath - error", "error", err.Error())
 		} else {
 			var result LocalCSVSQLLiteBatchRequest
 			err := env.GetWorkflowResult(&result)
 			require.NoError(t, err)
-			l.Debug(
-				"Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath - success",
-				"num-batches-processed", result.Snapshot.NumBatches,
-				"num-records-processed", result.Snapshot.NumRecords,
-			)
+			l.Debug("Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath - success", "num-batches-processed", result.Snapshot.NumBatches, "num-records-processed", result.Snapshot.NumRecords)
 			require.EqualValues(t, 4, result.Snapshot.NumBatches)
 			errorCount := 0
 			for _, errs := range result.Snapshot.Errors {
@@ -891,37 +849,23 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 				return
 			}
 
-			l.Debug(
-				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath - Activity started",
-				"activity-type", activityType,
-			)
+			l.Debug("Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath - Activity started", "activity-type", activityType)
 
 		})
 
 	defer func() {
 		if err := recover(); err != nil {
-			l.Error(
-				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath - panicked",
-				"workflow", ProcessLocalCSVSQLLiteWorkflowAlias,
-				"error", err,
-			)
+			l.Error("Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath - panicked", "workflow", ProcessLocalCSVSQLLiteWorkflowAlias, "error", err)
 		}
 
 		err := env.GetWorkflowError()
 		if err != nil {
-			l.Error(
-				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath - error",
-				"error", err.Error(),
-			)
+			l.Error("Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath - error", "error", err.Error())
 		} else {
 			var result LocalCSVSQLLiteBatchRequest
 			err := env.GetWorkflowResult(&result)
 			require.NoError(t, err)
-			l.Debug(
-				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath - success",
-				"num-batches-processed", result.Snapshot.NumBatches,
-				"num-records-processed", result.Snapshot.NumRecords,
-			)
+			l.Debug("Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath - success", "num-batches-processed", result.Snapshot.NumBatches, "num-records-processed", result.Snapshot.NumRecords)
 			require.EqualValues(t, 11, result.Snapshot.NumBatches)
 			errorCount := 0
 			for _, errs := range result.Snapshot.Errors {
@@ -1084,10 +1028,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_TimeoutError(t *testing.T) {
 				return
 			}
 
-			l.Debug(
-				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_TimeoutError - Activity started",
-				"activity-type", activityType,
-			)
+			l.Debug("Test_ProcessBatchWorkflow_LocalCSV_SQLLite_TimeoutError - Activity started", "activity-type", activityType)
 
 		},
 	)
@@ -1115,11 +1056,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_TimeoutError(t *testing.T) {
 
 	defer func() {
 		if err := recover(); err != nil {
-			l.Error(
-				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_TimeoutError - panicked",
-				"workflow", ProcessLocalCSVSQLLiteWorkflowAlias,
-				"error", err,
-			)
+			l.Error("Test_ProcessBatchWorkflow_LocalCSV_SQLLite_TimeoutError - panicked", "workflow", ProcessLocalCSVSQLLiteWorkflowAlias, "error", err)
 		}
 
 		err := env.GetWorkflowError()
@@ -1219,20 +1156,13 @@ func Test_ProcessBatchWorkflow_Err_NonRetryable(t *testing.T) {
 				return
 			}
 
-			l.Debug(
-				"Test_ProcessBatchWorkflow_Err_NonRetryable - Activity started",
-				"activity-type", activityType,
-			)
+			l.Debug("Test_ProcessBatchWorkflow_Err_NonRetryable - Activity started", "activity-type", activityType)
 
 		})
 
 	defer func() {
 		if err := recover(); err != nil {
-			l.Error(
-				"Test_ProcessBatchWorkflow_Err_NonRetryable - panicked",
-				"workflow", ProcessFakeSrcSinkWorkflowAlias,
-				"error", err,
-			)
+			l.Error("Test_ProcessBatchWorkflow_Err_NonRetryable - panicked", "workflow", ProcessFakeSrcSinkWorkflowAlias, "error", err)
 		}
 
 		err := env.GetWorkflowError()
@@ -1331,20 +1261,13 @@ func Test_ProcessBatchWorkflow_Err_Retryable(t *testing.T) {
 				return
 			}
 
-			l.Debug(
-				"Test_ProcessBatchWorkflow_Err_Retryable - Activity started",
-				"activity-type", activityType,
-			)
+			l.Debug("Test_ProcessBatchWorkflow_Err_Retryable - Activity started", "activity-type", activityType)
 
 		})
 
 	defer func() {
 		if err := recover(); err != nil {
-			l.Error(
-				"Test_ProcessBatchWorkflow_Err_Retryable - panicked",
-				"workflow", ProcessFakeSrcSinkWorkflowAlias,
-				"error", err,
-			)
+			l.Error("Test_ProcessBatchWorkflow_Err_Retryable - panicked", "workflow", ProcessFakeSrcSinkWorkflowAlias, "error", err)
 		}
 
 		err := env.GetWorkflowError()
