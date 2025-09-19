@@ -212,16 +212,16 @@ func (s *ProcessBatchWorkflowTestSuite) Test_ProcessBatchWorkflow_CloudCSV_SQLLi
 				} else {
 					l.Debug(
 						"Test_ProcessBatchWorkflow_CloudCSV_SQLLite_HappyPath - success",
-						"num-batches-processed", result.Snapshot.NumProcessed,
+						"num-batches-processed", result.Snapshot.NumBatches,
 						"num-records-processed", result.Snapshot.NumRecords,
 					)
 
-					s.EqualValues(10, uint(result.Snapshot.NumProcessed))
+					s.EqualValues(10, result.Snapshot.NumBatches)
 					errorCount := 0
 					for _, errs := range result.Snapshot.Errors {
 						errorCount += len(errs)
 					}
-					s.EqualValues(25, uint(result.Snapshot.NumRecords))
+					s.EqualValues(25, result.Snapshot.NumRecords)
 					s.EqualValues(0, errorCount)
 				}
 			}
@@ -542,18 +542,18 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath_Server(t *testing.T) {
 	require.NotNil(t, result)
 	require.True(t, result.Done, "workflow should be marked as done")
 
-	require.EqualValues(t, 11, int(result.Snapshot.NumProcessed))
+	require.EqualValues(t, 11, result.Snapshot.NumBatches)
 	errorCount := 0
 	for _, errs := range result.Snapshot.Errors {
 		errorCount += len(errs)
 	}
-	require.EqualValues(t, 20, int(result.Snapshot.NumRecords))
+	require.EqualValues(t, 20, result.Snapshot.NumRecords)
 	require.EqualValues(t, 0, errorCount)
 
 	l.Debug("Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath_Server - workflow completed successfully",
 		"workflow-id", run.GetID(),
 		"workflow-run-id", run.GetRunID(),
-		"num-batches-processed", result.Snapshot.NumProcessed,
+		"num-batches-processed", result.Snapshot.NumBatches,
 		"num-records-processed", result.Snapshot.NumRecords,
 	)
 }
@@ -738,15 +738,15 @@ func Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 			require.NoError(t, err)
 			l.Debug(
 				"Test_ProcessBatchWorkflow_Temp_LocalCSV_SQLLite_HappyPath - success",
-				"num-batches-processed", result.Snapshot.NumProcessed,
+				"num-batches-processed", result.Snapshot.NumBatches,
 				"num-records-processed", result.Snapshot.NumRecords,
 			)
-			require.EqualValues(t, 4, uint(result.Snapshot.NumProcessed))
+			require.EqualValues(t, 4, result.Snapshot.NumBatches)
 			errorCount := 0
 			for _, errs := range result.Snapshot.Errors {
 				errorCount += len(errs)
 			}
-			require.EqualValues(t, 13, uint(result.Snapshot.NumRecords))
+			require.EqualValues(t, 13, result.Snapshot.NumRecords)
 			require.EqualValues(t, 0, errorCount)
 		}
 
@@ -919,15 +919,15 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath(t *testing.T) {
 			require.NoError(t, err)
 			l.Debug(
 				"Test_ProcessBatchWorkflow_LocalCSV_SQLLite_HappyPath - success",
-				"num-batches-processed", result.Snapshot.NumProcessed,
+				"num-batches-processed", result.Snapshot.NumBatches,
 				"num-records-processed", result.Snapshot.NumRecords,
 			)
-			require.EqualValues(t, 11, uint(result.Snapshot.NumProcessed))
+			require.EqualValues(t, 11, result.Snapshot.NumBatches)
 			errorCount := 0
 			for _, errs := range result.Snapshot.Errors {
 				errorCount += len(errs)
 			}
-			require.EqualValues(t, 20, uint(result.Snapshot.NumRecords))
+			require.EqualValues(t, 20, result.Snapshot.NumRecords)
 			require.EqualValues(t, 0, errorCount)
 		}
 

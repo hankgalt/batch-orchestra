@@ -24,9 +24,9 @@ type BatchRecord struct {
 type BatchProcess struct {
 	BatchId     string
 	Records     []*BatchRecord
-	StartOffset string // start offset in the source
-	NextOffset  string // cursor / next-page token / byte offset
-	Error       string
+	StartOffset string         // start offset in the source
+	NextOffset  string         // cursor / next-page token / byte offset
+	Error       map[string]int // map of error message to count
 	Done        bool
 }
 
@@ -114,7 +114,7 @@ type BatchProcessingRequest[T any, S SourceConfig[T], D SinkConfig[T], SS Snapsh
 	MaxInProcessBatches uint                       // maximum number of batches to process
 	MaxBatches          uint                       // max number of batches to processed be waorkflow (continue as new limit)
 	PauseDuration       time.Duration              // duration to pause between batches
-	PauseRecordCount    uint                       // number of times to pause between batches
+	PauseRecordCount    int64                      // number of times to pause between batches
 	Policies            map[string]RetryPolicySpec // map of retry policies for batch activities by activity alias
 
 	Source      S  // source configuration
@@ -162,6 +162,8 @@ type BatchProcessingResult struct {
 	Batches        map[string]*BatchProcess // map of batch by ID
 	Error          string                   // error message if any
 	DonePercentage float32                  // percentage of batches done
+	NumRecords     int64                    // number of records processed
+	NumBatches     int64                    // number of batches processed
 }
 
 type ErrorRecord struct {
@@ -171,9 +173,9 @@ type ErrorRecord struct {
 
 type BatchSnapshot struct {
 	Done           bool
-	NumProcessed   uint                     // number of batches processed
-	NumRecords     uint                     // number of records processed
-	PauseCount     uint                     // number of times the job was paused
+	NumBatches     int64                    // number of batches processed
+	NumRecords     int64                    // number of records processed
+	PauseCount     int64                    // number of times the job was paused
 	SnapshotIdx    []string                 // snapshot indexes (offsets)
 	Errors         map[string][]ErrorRecord // map of batch ID to list of error records
 	DonePercentage float32                  // percentage of batches done

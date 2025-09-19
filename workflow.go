@@ -15,7 +15,7 @@ import (
 	"github.com/hankgalt/batch-orchestra/pkg/utils"
 )
 
-const DEFAULT_PAUSE_RECORD_COUNT = uint(1000)
+const DEFAULT_PAUSE_RECORD_COUNT = int64(1000)
 const DEFAULT_PAUSE_DURATION = 15 * time.Second
 
 const (
@@ -127,13 +127,21 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	req *domain.BatchProcessingRequest[T, S, D, SS],
 ) (*domain.BatchProcessingRequest[T, S, D, SS], error) {
 	l := workflow.GetLogger(ctx)
+	var stateSnapShot *domain.BatchSnapshot
 
 	// Get the workflow name
 	wkflname := workflow.GetInfo(ctx).WorkflowType.Name
 
 	// setup query handler for query type "state"
-	if err := workflow.SetQueryHandler(ctx, "state", func(input []byte) (*domain.BatchProcessingRequest[T, S, D, SS], error) {
-		return req, nil
+	if err := workflow.SetQueryHandler(ctx, "state", func(input []byte) (*domain.BatchSnapshot, error) {
+		l.Debug("ProcessBatchWorkflow - query state",
+			"source", req.Source.Name(),
+			"sink", req.Sink.Name(),
+			"current-start-at", req.StartAt,
+			"workflow", wkflname,
+			"snapshot", stateSnapShot,
+		)
+		return stateSnapShot, nil
 	}); err != nil {
 		l.Error(
 			"ProcessBatchWorkflow - SetQueryHandler failed",
@@ -186,7 +194,7 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	// TODO retry case, check for error
 	// Initiate a new queue & batch count
 	q := list.New()
-	batchCount := uint(len(req.Batches))
+	batchCount := len(req.Batches)
 	l.Debug(
 		"processBatchWorkflow context set & queue initiated",
 		"source", req.Source.Name(),
@@ -205,18 +213,26 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 			Offset:    req.Offsets[len(req.Offsets)-1],
 			BatchSize: req.BatchSize,
 		}).Get(fetchCtx, &fetched); err != nil {
+			// Build error snapshot
+			reqSnapshot := buildRequestSnapshot(req.Batches, req.Snapshot)
+
+			// build error result
+			result := &domain.BatchProcessingResult{
+				JobID:      req.JobID,
+				StartAt:    req.StartAt,
+				Offsets:    req.Offsets,
+				Batches:    req.Batches,
+				Error:      err.Error(),
+				Done:       req.Done,
+				NumRecords: reqSnapshot.NumRecords,
+				NumBatches: reqSnapshot.NumBatches,
+			}
+
 			// Execute error snapshot activity
 			if err := workflow.ExecuteActivity(
 				snapshotCtx,
 				snapshotActivityAlias,
-				&domain.BatchProcessingResult{
-					JobID:   req.JobID,
-					StartAt: req.StartAt,
-					Offsets: req.Offsets,
-					Batches: req.Batches,
-					Error:   err.Error(),
-					Done:    req.Done,
-				},
+				result,
 				true, // is an error snapshot
 				req.Snapshotter,
 			).Get(snapshotCtx, nil); err != nil {
@@ -260,7 +276,7 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 
 	// While there are items in queue
 	for q.Len() > 0 {
-		if q.Len() < int(req.MaxInProcessBatches) && !req.Done && batchCount < req.MaxBatches {
+		if q.Len() < int(req.MaxInProcessBatches) && !req.Done && batchCount < int(req.MaxBatches) {
 			// If # of items in queue are less than concurrent processing limit,
 			// there's more data & max batch limit not reached
 			// Fetch the next batch from the source
@@ -270,18 +286,26 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 				Offset:    req.Offsets[len(req.Offsets)-1],
 				BatchSize: req.BatchSize,
 			}).Get(fetchCtx, &fetched); err != nil {
+				// Build snapshot
+				reqSnapshot := buildRequestSnapshot(req.Batches, req.Snapshot)
+
+				// build error result
+				result := &domain.BatchProcessingResult{
+					JobID:      req.JobID,
+					StartAt:    req.StartAt,
+					Offsets:    req.Offsets,
+					Batches:    req.Batches,
+					Error:      err.Error(),
+					Done:       req.Done,
+					NumRecords: reqSnapshot.NumRecords,
+					NumBatches: reqSnapshot.NumBatches,
+				}
+
 				// Execute error snapshot activity
 				if err := workflow.ExecuteActivity(
 					snapshotCtx,
 					snapshotActivityAlias,
-					&domain.BatchProcessingResult{
-						JobID:   req.JobID,
-						StartAt: req.StartAt,
-						Offsets: req.Offsets,
-						Batches: req.Batches,
-						Error:   err.Error(),
-						Done:    req.Done,
-					},
+					result,
 					true, // is an error snapshot
 					req.Snapshotter,
 				).Get(snapshotCtx, nil); err != nil {
@@ -320,18 +344,26 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 			}
 			var wOut domain.WriteOutput[T]
 			if err := future.Get(writeCtx, &wOut); err != nil {
+				// Build snapshot
+				reqSnapshot := buildRequestSnapshot(req.Batches, req.Snapshot)
+
+				// build error result
+				result := &domain.BatchProcessingResult{
+					JobID:      req.JobID,
+					StartAt:    req.StartAt,
+					Offsets:    req.Offsets,
+					Batches:    req.Batches,
+					Error:      err.Error(),
+					Done:       req.Done,
+					NumRecords: reqSnapshot.NumRecords,
+					NumBatches: reqSnapshot.NumBatches,
+				}
+
 				// Execute error snapshot activity
 				if err := workflow.ExecuteActivity(
 					snapshotCtx,
 					snapshotActivityAlias,
-					&domain.BatchProcessingResult{
-						JobID:   req.JobID,
-						StartAt: req.StartAt,
-						Offsets: req.Offsets,
-						Batches: req.Batches,
-						Error:   err.Error(),
-						Done:    req.Done,
-					},
+					result,
 					true, // is an error snapshot
 					req.Snapshotter,
 				).Get(snapshotCtx, nil); err != nil {
@@ -385,6 +417,9 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		reqSnapshot.SnapshotIdx = append(reqSnapshot.SnapshotIdx, result.StartAt)
 		reqSnapshot.Done = req.Done
 
+		result.NumRecords = reqSnapshot.NumRecords
+		result.NumBatches = reqSnapshot.NumBatches
+
 		// update done percentage if source has size
 		if p, ok := any(req.Source).(domain.HasSize); ok {
 			if p.Size() > 0 && len(result.Offsets) > 0 {
@@ -410,8 +445,9 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 			}
 		}
 
-		// Update request snapshot
+		// Update request snapshot & state snapshot
 		req.Snapshot = reqSnapshot
+		stateSnapShot = reqSnapshot
 
 		// Execute result snapshot activity
 		if err := workflow.ExecuteActivity(
@@ -469,7 +505,7 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 				"snapshot-activity", snapshotActivityAlias,
 				"snapshot-pause-count", req.Snapshot.PauseCount,
 				"snapshot-num-records", req.Snapshot.NumRecords,
-				"num-processed", req.Snapshot.NumProcessed,
+				"num-processed", req.Snapshot.NumBatches,
 				"error", "pausing to reduce sink load",
 			)
 			// sleep for pause duration to reduce sink load
@@ -483,7 +519,7 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	}
 
 	// continue as new if not done & max batch count reached
-	if !req.Done && batchCount >= req.MaxBatches {
+	if !req.Done && batchCount >= int(req.MaxBatches) {
 		startAt := req.Offsets[len(req.Offsets)-1]
 		l.Debug(
 			"processBatchWorkflow continuing as new",
@@ -629,16 +665,16 @@ func buildSnapshotActivityOptions[T any, S domain.SourceConfig[T], D domain.Sink
 
 func buildRequestSnapshot(batches map[string]*domain.BatchProcess, snapshot *domain.BatchSnapshot) *domain.BatchSnapshot {
 	errRecs := map[string][]domain.ErrorRecord{}
-	numProcessed := uint(len(batches))
-	numRecords := uint(0)
-	pauseCount := uint(0)
+	numBatches := int64(len(batches))
+	numRecords := int64(0)
+	pauseCount := int64(0)
 	snapshotIdx := []string{}
 
 	if snapshot != nil {
 		if snapshot.Errors != nil {
 			errRecs = snapshot.Errors
 		}
-		numProcessed += snapshot.NumProcessed
+		numBatches += snapshot.NumBatches
 		numRecords += snapshot.NumRecords
 		pauseCount = snapshot.PauseCount
 		snapshotIdx = snapshot.SnapshotIdx
@@ -664,10 +700,10 @@ func buildRequestSnapshot(batches map[string]*domain.BatchProcess, snapshot *dom
 	}
 
 	return &domain.BatchSnapshot{
-		NumProcessed: numProcessed,
-		NumRecords:   numRecords,
-		Errors:       errRecs,
-		PauseCount:   pauseCount,
-		SnapshotIdx:  snapshotIdx,
+		NumBatches:  numBatches,
+		NumRecords:  numRecords,
+		Errors:      errRecs,
+		PauseCount:  pauseCount,
+		SnapshotIdx: snapshotIdx,
 	}
 }
