@@ -32,6 +32,11 @@ const WorkflowBatchLimit = uint(100)
 const MinimumInProcessBatches = uint(2)
 
 // ProcessBatchWorkflow processes a batch of records from a source to a sink.
+// Workflow state can queried using "state" query type.
+// Supports concurrent batch processing, configurable by max in-process batches limit.
+// Supports continue-as-new for long running workflows, configurable by max batches to process.
+// Supports pausing the workflow to reduce sink load, configurable by pause record count & pause duration.
+// Supports snapshotting the workflow state using a snapshotter after all batches are processed or on error.
 func ProcessBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T], SS domain.SnapshotConfig](
 	ctx workflow.Context,
 	req *domain.BatchProcessingRequest[T, S, D, SS],
@@ -88,7 +93,7 @@ func ProcessBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	return resp, nil
 }
 
-// ProcessBatchWorkflow processes a batch of records from a source to a sink.
+// processBatchWorkflow processes a batch of records from a source to a sink.
 func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T], SS domain.SnapshotConfig](
 	ctx workflow.Context,
 	req *domain.BatchProcessingRequest[T, S, D, SS],
@@ -379,6 +384,7 @@ func executeErrorSnapshotActivity[T any, S domain.SourceConfig[T], D domain.Sink
 	return nil
 }
 
+// defaultActivityOptions returns the default activity options.
 func defaultActivityOptions() workflow.ActivityOptions {
 	return workflow.ActivityOptions{
 		StartToCloseTimeout: time.Minute * 10,
@@ -391,6 +397,7 @@ func defaultActivityOptions() workflow.ActivityOptions {
 	}
 }
 
+// buildFetchActivityOptions builds the fetch activity options.
 func buildFetchActivityOptions[T any, S domain.SourceConfig[T], D domain.SinkConfig[T], SS domain.SnapshotConfig](
 	req *domain.BatchProcessingRequest[T, S, D, SS],
 ) workflow.ActivityOptions {
@@ -423,6 +430,7 @@ func buildFetchActivityOptions[T any, S domain.SourceConfig[T], D domain.SinkCon
 	return fetchAO
 }
 
+// buildWriteActivityOptions builds the write activity options.
 func buildWriteActivityOptions[T any, S domain.SourceConfig[T], D domain.SinkConfig[T], SS domain.SnapshotConfig](
 	req *domain.BatchProcessingRequest[T, S, D, SS],
 ) workflow.ActivityOptions {
@@ -455,6 +463,7 @@ func buildWriteActivityOptions[T any, S domain.SourceConfig[T], D domain.SinkCon
 	return writeAO
 }
 
+// buildSnapshotActivityOptions builds the snapshot activity options.
 func buildSnapshotActivityOptions[T any, S domain.SourceConfig[T], D domain.SinkConfig[T], SS domain.SnapshotConfig](
 	req *domain.BatchProcessingRequest[T, S, D, SS],
 ) workflow.ActivityOptions {
@@ -487,6 +496,7 @@ func buildSnapshotActivityOptions[T any, S domain.SourceConfig[T], D domain.Sink
 	return ssAO
 }
 
+// buildRequestSnapshot builds a snapshot from the batches and previous snapshot.
 func buildRequestSnapshot(batches map[string]*domain.BatchProcess, snapshot *domain.BatchSnapshot) *domain.BatchSnapshot {
 	errRecs := map[string][]domain.ErrorRecord{}
 	numBatches := int64(len(batches))

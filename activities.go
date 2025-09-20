@@ -103,7 +103,7 @@ func SnapshotActivity[SS domain.SnapshotConfig](
 	l.Debug("SnapshotActivity - started", "name", snapCfg.Name(), "job-id", result.JobID)
 
 	if result == nil {
-		l.Error("SnapshotActivity - nil batch processing result provided")
+		l.Error("SnapshotActivity - provided batch processing result is nil")
 		return nil
 	}
 
