@@ -1,8 +1,6 @@
 module github.com/hankgalt/batch-orchestra
 
-go 1.24.0
-
-toolchain go1.24.7
+go 1.24.7
 
 require (
 	cloud.google.com/go/storage v1.44.0
