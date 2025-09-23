@@ -144,8 +144,6 @@ func ReadCSVBatch(
 }
 
 // ReadCSVStream reads CSV records from the provided data buffer in a streaming fashion.
-// It processes records up to the last complete line, applies the transformation function,
-// and sends BatchRecords to the provided channel as they are processed.
 func ReadCSVStream(
 	ctx context.Context,
 	data []byte,

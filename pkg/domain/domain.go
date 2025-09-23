@@ -8,6 +8,24 @@ import (
 // Domain "record" type that moves through the pipeline.
 type CSVRow map[string]string
 
+// Base carrier of the required field.
+type WithId struct{ Id string }
+
+func (w WithId) GetId() string { return w.Id }
+
+// Generic constraint: anything with GetId().
+type HasId interface{ GetId() string }
+
+// Your generic type that “requires Id”.
+type CustomOffset[T HasId] struct {
+	Val T
+}
+
+type JSONOffset struct {
+	WithId
+	Value string
+}
+
 type BatchResult struct {
 	Result any
 	Error  string
@@ -15,7 +33,7 @@ type BatchResult struct {
 
 type BatchRecord struct {
 	Data        any
-	Start, End  string
+	Start, End  any
 	BatchResult BatchResult
 	Done        bool
 }
@@ -24,8 +42,8 @@ type BatchRecord struct {
 type BatchProcess struct {
 	BatchId     string
 	Records     []*BatchRecord
-	StartOffset string         // start offset in the source
-	NextOffset  string         // cursor / next-page token / byte offset
+	StartOffset any            // start offset in the source
+	NextOffset  any            // cursor / next-page token / byte offset
 	Error       map[string]int // map of error message to count
 	Done        bool
 }
@@ -39,14 +57,14 @@ type SourceConfig[T any] interface {
 // Source[T any] is a source of batches of T, e.g., a CSV file, a database table, etc.
 // Pulls the next batch given an offset; return next offset.
 type Source[T any] interface {
-	Next(ctx context.Context, offset string, n uint) (*BatchProcess, error)
+	Next(ctx context.Context, offset any, n uint) (*BatchProcess, error)
 	Name() string
 	Close(context.Context) error
 }
 
 // NextStreamer[T any] is an interface for streaming the next batch of records.
 type NextStreamer[T any] interface {
-	NextStream(ctx context.Context, offset string, n uint) (<-chan *BatchRecord, error)
+	NextStream(ctx context.Context, offset any, n uint) (<-chan *BatchRecord, error)
 }
 
 type HasSize interface {
@@ -67,6 +85,11 @@ type Sink[T any] interface {
 	Close(context.Context) error
 }
 
+// WriteStreamer[T any] is an interface for streaming writes of batches of T.
+type WriteStreamer[T any] interface {
+	WriteStream(ctx context.Context, start any, data []T) (<-chan BatchResult, error)
+}
+
 type SnapshotConfig interface {
 	BuildSnapshotter(ctx context.Context) (Snapshotter, error)
 	Name() string
@@ -76,11 +99,6 @@ type Snapshotter interface {
 	Snapshot(ctx context.Context, key string, snapshot any) error
 	Close(context.Context) error
 	Name() string
-}
-
-// WriteStreamer[T any] is an interface for streaming writes of batches of T.
-type WriteStreamer[T any] interface {
-	WriteStream(ctx context.Context, start string, data []T) (<-chan BatchResult, error)
 }
 
 // WriteInput[T any, D SinkConfig[T]] is the input for the WriteActivity.
@@ -97,7 +115,7 @@ type WriteOutput[T any] struct {
 // FetchInput[T any, S SourceConfig[T]] is the input for the FetchNextActivity.
 type FetchInput[T any, S SourceConfig[T]] struct {
 	Source    S
-	Offset    string
+	Offset    any
 	BatchSize uint
 }
 
@@ -121,9 +139,9 @@ type BatchProcessingRequest[T any, S SourceConfig[T], D SinkConfig[T], SS Snapsh
 	Sink        D  // sink configuration
 	Snapshotter SS // snapshotter configuration
 
-	StartAt  string                   // initial offset
+	StartAt  any                      // initial offset
 	Done     bool                     // whether the job is done
-	Offsets  []string                 // list of offsets for each batch
+	Offsets  []any                    // list of offsets for each batch
 	Batches  map[string]*BatchProcess // map of batch by ID
 	Snapshot *BatchSnapshot           // Processed snapshot
 }
@@ -156,10 +174,10 @@ type RetryPolicySpec struct {
 // is a result snapshot a batch of T
 type BatchProcessingResult struct {
 	JobID          string                   // unique identifier for the job
-	StartAt        string                   // initial offset
+	StartAt        any                      // initial offset
 	Done           bool                     // whether the job is done
-	Offsets        []string                 // list of offsets for each batch
-	Batches        map[string]*BatchProcess // map of batch by ID
+	Offsets        []any                    // list of offsets for each batch
+	Batches        map[string]*BatchProcess // map of batch by batch Id
 	Error          string                   // error message if any
 	DonePercentage float32                  // percentage of batches done
 	NumRecords     int64                    // number of records processed
@@ -167,7 +185,7 @@ type BatchProcessingResult struct {
 }
 
 type ErrorRecord struct {
-	Start, End string
+	Start, End any
 	Error      string
 }
 
@@ -176,7 +194,7 @@ type BatchSnapshot struct {
 	NumBatches     int64                    // number of batches processed
 	NumRecords     int64                    // number of records processed
 	PauseCount     int64                    // number of times the job was paused
-	SnapshotIdx    []string                 // snapshot indexes (offsets)
+	SnapshotIdx    []any                    // snapshot indexes (offsets)
 	Errors         map[string][]ErrorRecord // map of batch ID to list of error records
 	DonePercentage float32                  // percentage of batches done
 }

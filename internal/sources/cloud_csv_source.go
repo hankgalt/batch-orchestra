@@ -26,6 +26,8 @@ const (
 	ErrMsgCloudCSVMissingCreds         = "cloud csv: missing credentials path"
 	ErrMsgCloudCSVObjectNotExist       = "cloud csv: object does not exist or error getting attributes"
 	ErrMsgCloudCSVTransformerNil       = "cloud csv: transformer function is not set for cloud CSV source with headers"
+	ERR_CLOUD_INVALID_OFFSET           = "cloud csv: invalid offset, must be string"
+	ERR_CLOUD_PARSING_OFFSET           = "cloud csv: error parsing offset, must be int64"
 )
 
 var (
@@ -38,6 +40,8 @@ var (
 	ErrCloudCSVMissingCreds         = errors.New(ErrMsgCloudCSVMissingCreds)
 	ErrCloudCSVObjectNotExist       = errors.New(ErrMsgCloudCSVObjectNotExist)
 	ErrCloudCSVTransformerNil       = errors.New(ErrMsgCloudCSVTransformerNil)
+	ErrCloudInvalidOffset           = errors.New(ERR_CLOUD_INVALID_OFFSET)
+	ErrCloudParsingOffset           = errors.New(ERR_CLOUD_PARSING_OFFSET)
 )
 
 const (
@@ -92,9 +96,14 @@ func (s *cloudCSVSource) Name() string { return CloudCSVSource }
 
 func (s *cloudCSVSource) NextStream(
 	ctx context.Context,
-	offset string,
+	offset any,
 	size uint,
 ) (<-chan *domain.BatchRecord, error) {
+	offsetStr, ok := offset.(string)
+	if !ok {
+		return nil, ErrCloudInvalidOffset
+	}
+
 	// If size is 0 or negative, return an empty batch.
 	if size <= 0 {
 		return nil, ErrCloudCSVSizeMustBePositive
@@ -120,17 +129,17 @@ func (s *cloudCSVSource) NextStream(
 	// Create a reader for the object
 	rc, err := obj.NewReader(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("cloud csv: error creating reader for object %s in bucket %s: %w", s.path, s.bucket, err)
+		return nil, fmt.Errorf("cloudCSVSource:NextStream - error creating reader for object %s in bucket %s: %w", s.path, s.bucket, err)
 	}
 	defer func() {
 		if err := rc.Close(); err != nil {
-			log.Println("cloud csv: error closing reader", err)
+			log.Println("cloudCSVSource:NextStream - error closing reader", err)
 		}
 	}()
 
-	offsetInt64, err := utils.ParseInt64(offset)
+	offsetInt64, err := utils.ParseInt64(offsetStr)
 	if err != nil {
-		return nil, fmt.Errorf("cloud csv: invalid offset %s: %w", offset, err)
+		return nil, ErrCloudParsingOffset
 	}
 
 	// Set start index & done flag.
@@ -158,8 +167,8 @@ func (s *cloudCSVSource) NextStream(
 	resStream := make(chan *domain.BatchRecord)
 	if done {
 		resStream <- &domain.BatchRecord{
-			Start: offset,
-			End:   offset,
+			Start: offsetStr,
+			End:   offsetStr,
 			Done:  done,
 		}
 	}
@@ -178,7 +187,7 @@ func (s *cloudCSVSource) NextStream(
 			resStream,
 		)
 		if err != nil {
-			log.Printf("error reading CSV data stream - path: %s, offset: %s, error: %s", s.path, offset, err.Error())
+			log.Printf("cloudCSVSource:NextStream - error reading CSV data stream - path: %s, offset: %s, error: %s", s.path, offsetStr, err.Error())
 		}
 	}()
 
@@ -190,13 +199,18 @@ func (s *cloudCSVSource) NextStream(
 // Currently only supports GCP Storage. Ensure the environment variable is set for GCP credentials
 func (s *cloudCSVSource) Next(
 	ctx context.Context,
-	offset string,
+	offset any,
 	size uint,
 ) (*domain.BatchProcess, error) {
+	offsetStr, ok := offset.(string)
+	if !ok {
+		return nil, ErrCloudInvalidOffset
+	}
+
 	bp := &domain.BatchProcess{
 		Records:     nil,
-		NextOffset:  offset,
-		StartOffset: offset,
+		NextOffset:  offsetStr,
+		StartOffset: offsetStr,
 		Done:        false,
 	}
 
@@ -225,11 +239,11 @@ func (s *cloudCSVSource) Next(
 	// Create a reader for the object
 	rc, err := obj.NewReader(ctx)
 	if err != nil {
-		return bp, fmt.Errorf("cloud csv: error creating reader for object %s in bucket %s: %w", s.path, s.bucket, err)
+		return bp, fmt.Errorf("cloudCSVSource:Next - error creating reader for object %s in bucket %s: %w", s.path, s.bucket, err)
 	}
 	defer func() {
 		if err := rc.Close(); err != nil {
-			log.Println("cloud csv: error closing reader", err)
+			log.Println("cloudCSVSource:Next - error closing reader", err)
 		}
 	}()
 
@@ -242,16 +256,16 @@ func (s *cloudCSVSource) Next(
 		Reader: rc,
 	}
 
-	offsetInt64, err := utils.ParseInt64(offset)
+	offsetInt64, err := utils.ParseInt64(offsetStr)
 	if err != nil {
-		return nil, fmt.Errorf("cloud csv: invalid offset %s: %w", offset, err)
+		return nil, ErrCloudParsingOffset
 	}
 
 	// Read data bytes from the object at the specified offset
 	data := make([]byte, size)
 	numBytesRead, err := readAtAdapter.ReadAt(data, offsetInt64)
 	if err != nil && err != io.EOF {
-		return bp, fmt.Errorf("error reading object %s in bucket %s at offset %s: %w", s.path, s.bucket, offset, err)
+		return bp, fmt.Errorf("cloudCSVSource:Next - error reading object %s in bucket %s at offset %s: %w", s.path, s.bucket, offsetStr, err)
 	}
 
 	// If read data is less than requested, cursor reached EOF, set Done

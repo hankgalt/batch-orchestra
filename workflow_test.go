@@ -306,7 +306,7 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError(t *testing.T)
 	}
 
 	req := &LocalCSVSQLLiteBatchRequest{
-		JobID:               "job-local-csv-sqllite-continue-as-new-error-happy",
+		JobID:               "job-local-csv-sqllite-continue-as-new-error",
 		BatchSize:           400,
 		MaxInProcessBatches: 2,
 		MaxBatches:          6,
@@ -346,7 +346,18 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_ContinueAsNewError(t *testing.T)
 		require.True(t, ok, "expected to extract continue-as-new input, got error: %v", decErr)
 		require.NoError(t, decErr, "error extracting continue-as-new input")
 		require.NotNil(t, &next, "expected non-nil continue-as-new input")
-		require.True(t, next.StartAt > req.StartAt, "expected next.StartAt > req.StartAt")
+
+		nextStartAtStr, ok := next.StartAt.(string)
+		require.True(t, ok, "expected next.StartAt to be string")
+		nextStartAt, err := utils.ParseInt64(nextStartAtStr)
+		require.NoError(t, err, "error parsing next.StartAt to int64")
+
+		reqStartAtStr, ok := req.StartAt.(string)
+		require.True(t, ok, "expected req.StartAt to be string")
+		reqStartAt, err := utils.ParseInt64(reqStartAtStr)
+		require.NoError(t, err, "error parsing req.StartAt to int64")
+
+		require.True(t, nextStartAt > reqStartAt, "expected next.StartAt > req.StartAt")
 	}()
 
 	env.ExecuteWorkflow(ProcessLocalCSVSQLLiteWorkflowAlias, req)
@@ -1041,7 +1052,12 @@ func Test_ProcessBatchWorkflow_LocalCSV_SQLLite_TimeoutError(t *testing.T) {
 			ctx context.Context,
 			in *domain.FetchInput[domain.CSVRow, *sources.LocalCSVConfig],
 		) (*domain.FetchOutput[domain.CSVRow], error) {
-			offsetInt, err := utils.ParseInt64(in.Offset)
+			inOffsetStr, ok := in.Offset.(string)
+			if !ok {
+				return nil, temporal.NewNonRetryableApplicationError("offset not string", "OffsetTypeError", nil)
+			}
+
+			offsetInt, err := utils.ParseInt64(inOffsetStr)
 			if err != nil {
 				return nil, err
 			}
@@ -1335,7 +1351,7 @@ type fakeSource struct{}
 
 func (s *fakeSource) Name() string                    { return FakeSource }
 func (s *fakeSource) Close(ctx context.Context) error { return nil }
-func (s *fakeSource) Next(ctx context.Context, offset string, size uint) (*domain.BatchProcess, error) {
+func (s *fakeSource) Next(ctx context.Context, offset any, size uint) (*domain.BatchProcess, error) {
 	if ctx != nil {
 		if fail, ok := ctx.Value("fail-next").(bool); ok && fail {
 			return nil, errors.New(ErrMsgSourceNext)

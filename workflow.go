@@ -117,7 +117,7 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		req.Batches = map[string]*domain.BatchProcess{}
 	}
 	if req.Offsets == nil {
-		req.Offsets = []string{}
+		req.Offsets = []any{}
 		req.Offsets = append(req.Offsets, req.StartAt)
 	}
 	if req.MaxInProcessBatches < MinimumInProcessBatches {
@@ -158,8 +158,9 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 			Offset:    req.Offsets[len(req.Offsets)-1],
 			BatchSize: req.BatchSize,
 		}).Get(fetchCtx, &fetched); err != nil {
+			l.Error("processBatchWorkflow fetch activity failed", "source", req.Source.Name(), "start-at", req.StartAt, "workflow", wkflname, "fetch-activity", fetchActivityAlias, "error", err.Error())
 			if execErr := executeErrorSnapshotActivity(snapshotCtx, snapshotActivityAlias, req, err); execErr != nil {
-				l.Error("processBatchWorkflow error snapshot activity failed", "snapshotter", req.Snapshotter.Name(), "source", req.Source.Name(), "sink", req.Sink.Name(), "start-at", req.StartAt, "workflow", wkflname, "snapshot-activity", snapshotActivityAlias, "error", execErr.Error())
+				l.Error("processBatchWorkflow error snapshot activity failed", "snapshotter", req.Snapshotter.Name(), "start-at", req.StartAt, "workflow", wkflname, "snapshot-activity", snapshotActivityAlias, "error", execErr.Error())
 			}
 			return req, err
 		}
@@ -169,7 +170,17 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 
 		// Update request state with fetched batch
 		req.Offsets = append(req.Offsets, fetched.Batch.NextOffset)
-		fetched.Batch.BatchId = domain.GetBatchId(fetched.Batch.StartOffset, fetched.Batch.NextOffset, "", "")
+
+		batchId, err := domain.GetBatchId(fetched.Batch.StartOffset, fetched.Batch.NextOffset, "", "")
+		if err != nil {
+			l.Error("processBatchWorkflow get batch ID failed", "snapshotter", req.Snapshotter.Name(), "source", req.Source.Name(), "sink", req.Sink.Name(), "start-at", req.StartAt, "workflow", wkflname, "error", err.Error())
+			if execErr := executeErrorSnapshotActivity(snapshotCtx, snapshotActivityAlias, req, err); execErr != nil {
+				l.Error("processBatchWorkflow error snapshot activity failed", "snapshotter", req.Snapshotter.Name(), "start-at", req.StartAt, "workflow", wkflname, "snapshot-activity", snapshotActivityAlias, "error", execErr.Error())
+			}
+			return req, err
+		}
+
+		fetched.Batch.BatchId = batchId
 		req.Batches[fetched.Batch.BatchId] = fetched.Batch
 		req.Done = fetched.Batch.Done
 
@@ -206,7 +217,17 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 
 			// Update request state with fetched batch details
 			req.Offsets = append(req.Offsets, fetched.Batch.NextOffset)
-			fetched.Batch.BatchId = domain.GetBatchId(fetched.Batch.StartOffset, fetched.Batch.NextOffset, "", "")
+
+			batchId, err := domain.GetBatchId(fetched.Batch.StartOffset, fetched.Batch.NextOffset, "", "")
+			if err != nil {
+				l.Error("processBatchWorkflow get batch ID failed", "snapshotter", req.Snapshotter.Name(), "source", req.Source.Name(), "sink", req.Sink.Name(), "start-at", req.StartAt, "workflow", wkflname, "error", err.Error())
+				if execErr := executeErrorSnapshotActivity(snapshotCtx, snapshotActivityAlias, req, err); execErr != nil {
+					l.Error("processBatchWorkflow error snapshot activity failed", "snapshotter", req.Snapshotter.Name(), "start-at", req.StartAt, "workflow", wkflname, "snapshot-activity", snapshotActivityAlias, "error", execErr.Error())
+				}
+				return req, err
+			}
+
+			fetched.Batch.BatchId = batchId
 			req.Batches[fetched.Batch.BatchId] = fetched.Batch
 			req.Done = fetched.Batch.Done
 
@@ -231,8 +252,16 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 				return req, err
 			}
 
+			batchId, err := domain.GetBatchId(wOut.Batch.StartOffset, wOut.Batch.NextOffset, "", "")
+			if err != nil {
+				l.Error("processBatchWorkflow get batch ID failed", "snapshotter", req.Snapshotter.Name(), "source", req.Source.Name(), "sink", req.Sink.Name(), "start-at", req.StartAt, "workflow", wkflname, "error", err.Error())
+				if execErr := executeErrorSnapshotActivity(snapshotCtx, snapshotActivityAlias, req, err); execErr != nil {
+					l.Error("processBatchWorkflow error snapshot activity failed", "snapshotter", req.Snapshotter.Name(), "start-at", req.StartAt, "workflow", wkflname, "snapshot-activity", snapshotActivityAlias, "error", execErr.Error())
+				}
+				return req, err
+			}
+
 			// Update request state
-			batchId := domain.GetBatchId(wOut.Batch.StartOffset, wOut.Batch.NextOffset, "", "")
 			if _, ok := req.Batches[batchId]; !ok {
 				l.Warn("processBatchWorkflow missing batch initial state", "source", req.Source.Name(), "sink", req.Sink.Name(), "start-at", req.StartAt, "workflow", wkflname, "batch-id", batchId, "fetch-activity", fetchActivityAlias, "write-activity", writeActivityAlias)
 			}
@@ -327,11 +356,13 @@ func executeResultSnapshotActivity[T any, S domain.SourceConfig[T], D domain.Sin
 		if p.Size() > 0 && len(result.Offsets) > 0 {
 			lastOffset := result.Offsets[len(result.Offsets)-1]
 
-			if lastOffsetInt64, err := utils.ParseInt64(lastOffset); err == nil {
-				reqSnapshot.DonePercentage = float32(lastOffsetInt64 / p.Size() * 100)
-				result.DonePercentage = reqSnapshot.DonePercentage
-			} else {
-				l.Error("executeResultSnapshotActivity error converting last offset to int64 for done percentage", "source", req.Source.Name(), "sink", req.Sink.Name(), "start-at", req.StartAt, "snapshot-activity", snapshotActivityAlias, "last-offset", lastOffset, "size", p.Size(), "error", err.Error())
+			if lastOffsetStr, ok := lastOffset.(string); ok {
+				if lastOffsetInt64, err := utils.ParseInt64(lastOffsetStr); err == nil {
+					reqSnapshot.DonePercentage = float32(lastOffsetInt64 / p.Size() * 100)
+					result.DonePercentage = reqSnapshot.DonePercentage
+				} else {
+					l.Error("executeResultSnapshotActivity error converting last offset to int64 for done percentage", "source", req.Source.Name(), "sink", req.Sink.Name(), "start-at", req.StartAt, "snapshot-activity", snapshotActivityAlias, "last-offset", lastOffset, "size", p.Size(), "error", err.Error())
+				}
 			}
 		}
 	}
@@ -502,7 +533,7 @@ func buildRequestSnapshot(batches map[string]*domain.BatchProcess, snapshot *dom
 	numBatches := int64(len(batches))
 	numRecords := int64(0)
 	pauseCount := int64(0)
-	snapshotIdx := []string{}
+	snapshotIdx := []any{}
 
 	if snapshot != nil {
 		if snapshot.Errors != nil {

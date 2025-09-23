@@ -18,20 +18,41 @@ func GetSnapshotActivityName(snapCfg SnapshotConfig) string {
 	return "snapshot-" + snapCfg.Name() + "-batch-activity-alias"
 }
 
-func GetBatchId(start, end string, prefix, suffix string) string {
+func GetBatchId(start, end any, prefix, suffix string) (string, error) {
+	if start == nil || end == nil {
+		return "", fmt.Errorf("start and end offsets must be non-nil")
+	}
+
+	var startStr, endStr string
+	switch start.(type) {
+	case int, int8, int16, int32, int64:
+		startStr, endStr = fmt.Sprintf("%d", start), fmt.Sprintf("%d", end)
+	case uint, uint8, uint16, uint32, uint64:
+		startStr, endStr = fmt.Sprintf("%d", start), fmt.Sprintf("%d", end)
+	case float32, float64:
+		startStr, endStr = fmt.Sprintf("%f", start), fmt.Sprintf("%f", end)
+	case string:
+		startStr, endStr = start.(string), end.(string)
+	case CustomOffset[HasId]:
+		startStr = start.(CustomOffset[HasId]).Val.GetId()
+		endStr = end.(CustomOffset[HasId]).Val.GetId()
+	default:
+		return "", fmt.Errorf("invalid offset type %T, must be numeric, string, or CustomOffset[HasId]", start)
+	}
+
 	if prefix == "" && suffix == "" {
-		return fmt.Sprintf("batch-%s-%s", start, end)
+		return fmt.Sprintf("batch-%s-%s", startStr, endStr), nil
 	}
 
 	if prefix != "" && suffix != "" {
-		return fmt.Sprintf("%s-%s-%s-%s", prefix, start, end, suffix)
+		return fmt.Sprintf("%s-%s-%s-%s", prefix, startStr, endStr, suffix), nil
 	}
 
 	if prefix != "" {
-		return fmt.Sprintf("%s-%s-%s", prefix, start, end)
+		return fmt.Sprintf("%s-%s-%s", prefix, startStr, endStr), nil
 	}
 
-	return fmt.Sprintf("%s-%s-%s", start, end, suffix)
+	return fmt.Sprintf("%s-%s-%s", startStr, endStr, suffix), nil
 }
 
 // BuildTransformerWithRules creates a transformer function based on the provided headers and rules.

@@ -39,8 +39,9 @@ const (
 type ETLRequest[T any] struct {
 	MaxBatches uint
 	BatchSize  uint
+	Start      any
 	Done       bool
-	Offsets    []string
+	Offsets    []any
 	Batches    map[string]*domain.BatchProcess
 }
 
@@ -118,7 +119,13 @@ func Test_FetchNext_LocalTempCSV(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, val.Get(&out))
 
-		nOffset, err := utils.ParseInt64(out.Batch.NextOffset)
+		nextOffsetStr, ok := out.Batch.NextOffset.(string)
+		if !ok {
+			l.Error("invalid offset type", "type", fmt.Sprintf("%T", out.Batch.NextOffset))
+			t.FailNow()
+		}
+
+		nOffset, err := utils.ParseInt64(nextOffsetStr)
 		require.NoError(t, err)
 
 		sOffset, err := utils.ParseInt64(nextOffset)
@@ -181,7 +188,13 @@ func Test_FetchNext_LocalCSV(t *testing.T) {
 	var out domain.FetchOutput[domain.CSVRow]
 	require.NoError(t, val.Get(&out))
 
-	nOffset, err := utils.ParseInt64(out.Batch.NextOffset)
+	nextOffsetStr, ok := out.Batch.NextOffset.(string)
+	if !ok {
+		l.Error("invalid offset type", "type", fmt.Sprintf("%T", out.Batch.NextOffset))
+		t.FailNow()
+	}
+
+	nOffset, err := utils.ParseInt64(nextOffsetStr)
 	require.NoError(t, err)
 
 	sOffset, err := utils.ParseInt64(nextOffset)
@@ -200,7 +213,13 @@ func Test_FetchNext_LocalCSV(t *testing.T) {
 
 		require.NoError(t, val.Get(&out))
 
-		nOffset, err := utils.ParseInt64(out.Batch.NextOffset)
+		nextOffsetStr, ok := out.Batch.NextOffset.(string)
+		if !ok {
+			l.Error("invalid offset type", "type", fmt.Sprintf("%T", out.Batch.NextOffset))
+			t.FailNow()
+		}
+
+		nOffset, err := utils.ParseInt64(nextOffsetStr)
 		require.NoError(t, err)
 
 		sOffset, err := utils.ParseInt64(nextOffset)
@@ -259,7 +278,14 @@ func Test_FetchNext_CloudCSV(t *testing.T) {
 
 	var out domain.FetchOutput[domain.CSVRow]
 	require.NoError(t, val.Get(&out))
-	nOffset, err := utils.ParseInt64(out.Batch.NextOffset)
+
+	nextOffsetStr, ok := out.Batch.NextOffset.(string)
+	if !ok {
+		l.Error("invalid offset type", "type", fmt.Sprintf("%T", out.Batch.NextOffset))
+		t.FailNow()
+	}
+
+	nOffset, err := utils.ParseInt64(nextOffsetStr)
 	require.NoError(t, err)
 
 	sOffset, err := utils.ParseInt64(nextOffset)
@@ -277,7 +303,14 @@ func Test_FetchNext_CloudCSV(t *testing.T) {
 		require.NoError(t, err)
 
 		require.NoError(t, val.Get(&out))
-		nOffset, err := utils.ParseInt64(out.Batch.NextOffset)
+
+		nextOffsetStr, ok := out.Batch.NextOffset.(string)
+		if !ok {
+			l.Error("invalid offset type", "type", fmt.Sprintf("%T", out.Batch.NextOffset))
+			t.FailNow()
+		}
+
+		nOffset, err := utils.ParseInt64(nextOffsetStr)
 		require.NoError(t, err)
 
 		sOffset, err := utils.ParseInt64(nextOffset)
@@ -503,7 +536,7 @@ func Test_FetchAndWrite_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 		MaxBatches: 2,
 		BatchSize:  400,
 		Done:       false,
-		Offsets:    []string{},
+		Offsets:    []any{},
 		Batches:    map[string]*domain.BatchProcess{},
 	}
 
@@ -562,9 +595,21 @@ func Test_FetchAndWrite_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 			require.NoError(t, fVal.Get(&fOut))
 			require.Equal(t, true, len(fOut.Batch.Records) > 0)
 
+			nextOffsetStr, ok := fOut.Batch.NextOffset.(string)
+			if !ok {
+				l.Error("invalid offset type", "type", fmt.Sprintf("%T", fOut.Batch.NextOffset))
+				t.FailNow()
+			}
+
+			startOffsetStr, ok := fOut.Batch.StartOffset.(string)
+			if !ok {
+				l.Error("invalid offset type", "type", fmt.Sprintf("%T", fOut.Batch.StartOffset))
+				t.FailNow()
+			}
+
 			etlReq.Done = fOut.Batch.Done
 			etlReq.Offsets = append(etlReq.Offsets, fOut.Batch.NextOffset)
-			etlReq.Batches[fmt.Sprintf("batch-%s-%s", fOut.Batch.StartOffset, fOut.Batch.NextOffset)] = fOut.Batch
+			etlReq.Batches[fmt.Sprintf("batch-%s-%s", startOffsetStr, nextOffsetStr)] = fOut.Batch
 
 			wIn = &domain.WriteInput[domain.CSVRow, *sinks.SQLLiteSinkConfig[domain.CSVRow]]{
 				Sink:  sinkCfg,
@@ -588,7 +633,19 @@ func Test_FetchAndWrite_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 			require.NoError(t, wVal.Get(&wOut))
 			require.Equal(t, true, len(wOut.Batch.Records) > 0)
 
-			batchId := fmt.Sprintf("batch-%s-%s", wOut.Batch.StartOffset, wOut.Batch.NextOffset)
+			nextOffsetStr, ok := wOut.Batch.NextOffset.(string)
+			if !ok {
+				l.Error("invalid offset type", "type", fmt.Sprintf("%T", wOut.Batch.NextOffset))
+				t.FailNow()
+			}
+
+			startOffsetStr, ok := wOut.Batch.StartOffset.(string)
+			if !ok {
+				l.Error("invalid offset type", "type", fmt.Sprintf("%T", wOut.Batch.StartOffset))
+				t.FailNow()
+			}
+
+			batchId := fmt.Sprintf("batch-%s-%s", startOffsetStr, nextOffsetStr)
 			if _, ok := etlReq.Batches[batchId]; !ok {
 				etlReq.Batches[batchId] = wOut.Batch
 			} else {
@@ -693,7 +750,7 @@ func Test_FetchAndWrite_Temp_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 		MaxBatches: 2,
 		BatchSize:  200,
 		Done:       false,
-		Offsets:    []string{},
+		Offsets:    []any{},
 		Batches:    map[string]*domain.BatchProcess{},
 	}
 
@@ -754,7 +811,20 @@ func Test_FetchAndWrite_Temp_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 
 			etlReq.Done = fOut.Batch.Done
 			etlReq.Offsets = append(etlReq.Offsets, fOut.Batch.NextOffset)
-			etlReq.Batches[fmt.Sprintf("batch-%s-%s", fOut.Batch.StartOffset, fOut.Batch.NextOffset)] = fOut.Batch
+
+			nextOffsetStr, ok := fOut.Batch.NextOffset.(string)
+			if !ok {
+				l.Error("invalid offset type", "type", fmt.Sprintf("%T", fOut.Batch.NextOffset))
+				t.FailNow()
+			}
+
+			startOffsetStr, ok := fOut.Batch.StartOffset.(string)
+			if !ok {
+				l.Error("invalid offset type", "type", fmt.Sprintf("%T", fOut.Batch.StartOffset))
+				t.FailNow()
+			}
+
+			etlReq.Batches[fmt.Sprintf("batch-%s-%s", startOffsetStr, nextOffsetStr)] = fOut.Batch
 
 			wIn = &domain.WriteInput[domain.CSVRow, *sinks.SQLLiteSinkConfig[domain.CSVRow]]{
 				Sink:  sinkCfg,
@@ -778,7 +848,19 @@ func Test_FetchAndWrite_Temp_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 			require.NoError(t, wVal.Get(&wOut))
 			require.Equal(t, true, len(wOut.Batch.Records) > 0)
 
-			batchId := fmt.Sprintf("batch-%s-%s", wOut.Batch.StartOffset, wOut.Batch.NextOffset)
+			nextOffsetStr, ok := wOut.Batch.NextOffset.(string)
+			if !ok {
+				l.Error("invalid offset type", "type", fmt.Sprintf("%T", wOut.Batch.NextOffset))
+				t.FailNow()
+			}
+
+			startOffsetStr, ok := wOut.Batch.StartOffset.(string)
+			if !ok {
+				l.Error("invalid offset type", "type", fmt.Sprintf("%T", wOut.Batch.StartOffset))
+				t.FailNow()
+			}
+
+			batchId := fmt.Sprintf("batch-%s-%s", startOffsetStr, nextOffsetStr)
 			if _, ok := etlReq.Batches[batchId]; !ok {
 				etlReq.Batches[batchId] = wOut.Batch
 			} else {
