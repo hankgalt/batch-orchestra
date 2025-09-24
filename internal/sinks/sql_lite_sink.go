@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 
 	sqllite "github.com/hankgalt/batch-orchestra/internal/clients/sql_lite"
 	"github.com/hankgalt/batch-orchestra/pkg/domain"
@@ -13,17 +14,19 @@ import (
 
 // Error constants and variables
 const (
-	ErrMsgSQLLiteSinkNil            = "sql-lite sink is nil"
-	ErrMsgSQLLiteSinkNilClient      = "sql-lite sink: nil client"
-	ErrMsgSQLLiteSinkEmptyTable     = "sql-lite sink: empty table"
-	ErrMsgSQLLiteSinkDBFileRequired = "sql-lite sink: DB file is required"
+	ERR_SQLLITE_SINK_NIL               = "sql-lite sink is nil"
+	ERR_SQLLITE_SINK_NIL_CLIENT        = "sql-lite sink: nil client"
+	ERR_SQLLITE_SINK_EMPTY_TABLE       = "sql-lite sink: empty table"
+	ERR_SQLLITE_SINK_DB_FILE_REQUIRED  = "sql-lite sink: DB file is required"
+	ERR_SQLLITE_SINK_ALL_BATCH_RECORDS = "sql-lite sink: all batch records failed"
 )
 
 var (
-	ErrSQLLiteSinkNil            = errors.New(ErrMsgSQLLiteSinkNil)
-	ErrSQLLiteSinkNilClient      = errors.New(ErrMsgSQLLiteSinkNilClient)
-	ErrSQLLiteSinkEmptyTable     = errors.New(ErrMsgSQLLiteSinkEmptyTable)
-	ErrSQLLiteSinkDBFileRequired = errors.New(ErrMsgSQLLiteSinkDBFileRequired)
+	ErrSQLLiteSinkNil             = errors.New(ERR_SQLLITE_SINK_NIL)
+	ErrSQLLiteSinkNilClient       = errors.New(ERR_SQLLITE_SINK_NIL_CLIENT)
+	ErrSQLLiteSinkEmptyTable      = errors.New(ERR_SQLLITE_SINK_EMPTY_TABLE)
+	ErrSQLLiteSinkDBFileRequired  = errors.New(ERR_SQLLITE_SINK_DB_FILE_REQUIRED)
+	ErrSQLLiteSinkAllBatchRecords = errors.New(ERR_SQLLITE_SINK_ALL_BATCH_RECORDS)
 )
 
 const SQLLiteSink = "sql-lite-sink"
@@ -94,6 +97,123 @@ func (s *sqlLiteSink[T]) Write(ctx context.Context, b *domain.BatchProcess) (*do
 			continue
 		}
 		b.Records[i].BatchResult.Result = n // store the inserted ID or result
+	}
+	return b, nil
+}
+
+// WriteStream writes the batch of records to MongoDB.
+func (s *sqlLiteSink[T]) WriteStream(ctx context.Context, b *domain.BatchProcess) (*domain.BatchProcess, error) {
+	if s == nil {
+		return b, ErrSQLLiteSinkNil
+	}
+	if s.client == nil {
+		return b, ErrSQLLiteSinkNilClient
+	}
+	if s.table == "" {
+		return b, ErrSQLLiteSinkEmptyTable
+	}
+
+	if len(b.Records) == 0 {
+		return b, nil // nothing to write
+	}
+
+	type out struct {
+		idx int
+		res int64
+		err error
+	}
+
+	const maxConcurrent = 8
+	sem := make(chan struct{}, maxConcurrent) // semaphore to cap concurrency
+	ch := make(chan out)
+	var wg sync.WaitGroup
+	launched := 0
+
+	var errCount int
+	errs := map[string]int{}
+	for i, rec := range b.Records {
+		// allow cancellation before launching work
+		select {
+		case <-ctx.Done():
+			// Stop launching new work; we'll still drain anything already launched.
+			goto waitAndCollect
+		default:
+		}
+
+		if rec.BatchResult.Error != "" {
+			continue // skip already errored records
+		}
+
+		launched++
+		wg.Add(1)
+		sem <- struct{}{} // acquire slot
+
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }() // release slot
+
+			doc, err := toMapAny(rec.Data)
+			if err != nil {
+				select {
+				case ch <- out{idx: i, err: err}:
+				case <-ctx.Done():
+				}
+				return
+			}
+
+			res, err := s.client.InsertRecord(ctx, s.table, doc)
+			if err != nil {
+				select {
+				case ch <- out{idx: i, err: err}:
+				case <-ctx.Done():
+				}
+				return
+			}
+
+			n, err := res.LastInsertId()
+			if err != nil {
+				select {
+				case ch <- out{idx: i, err: err}:
+				case <-ctx.Done():
+				}
+				return
+			}
+
+			select {
+			case ch <- out{idx: i, res: n}:
+			case <-ctx.Done():
+			}
+		}(i)
+	}
+
+waitAndCollect:
+	// Close ch after all launched goroutines finish.
+	go func() {
+		wg.Wait()
+		close(ch)
+	}()
+
+	// Collect results and update b in a single goroutine (this one).
+	for r := range ch {
+		if r.err != nil {
+			b.Records[r.idx].BatchResult.Error = r.err.Error()
+			errs[r.err.Error()]++
+			errCount++
+			continue
+		}
+		b.Records[r.idx].BatchResult.Result = r.res
+	}
+
+	// Set the error map on the batch
+	b.Error = errs
+
+	// If we aborted launches due to cancellation, surface that.
+	if err := ctx.Err(); err != nil {
+		return b, err
+	}
+
+	if errCount >= len(b.Records) {
+		return b, ErrSQLLiteSinkAllBatchRecords
 	}
 	return b, nil
 }

@@ -654,8 +654,14 @@ func Test_FetchAndWrite_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 		}
 	}
 
-	l.Debug("ETL request done.", "offsets", etlReq.Offsets, "num-batches", len(etlReq.Batches))
-	require.Equal(t, true, len(etlReq.Offsets) > 0)
+	recCount := 0
+	for _, b := range etlReq.Batches {
+		recCount += len(b.Records)
+	}
+	l.Debug("ETL request done.", "num-offsets", len(etlReq.Offsets), "num-batches", len(etlReq.Batches), "num-records", recCount)
+	require.EqualValues(t, len(etlReq.Batches), 11)
+	require.EqualValues(t, len(etlReq.Offsets), 12)
+	require.EqualValues(t, recCount, 20)
 }
 
 func Test_FetchAndWrite_Temp_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
@@ -869,8 +875,14 @@ func Test_FetchAndWrite_Temp_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 		}
 	}
 
-	l.Debug("ETL request done.", "offsets", etlReq.Offsets, "num-batches", len(etlReq.Batches))
-	require.Equal(t, true, len(etlReq.Offsets) > 0)
+	recCount := 0
+	for _, b := range etlReq.Batches {
+		recCount += len(b.Records)
+	}
+	l.Debug("ETL request done.", "offsets", len(etlReq.Offsets), "num-batches", len(etlReq.Batches), "num-records", recCount)
+	require.EqualValues(t, len(etlReq.Batches), 4)
+	require.EqualValues(t, len(etlReq.Offsets), 5)
+	require.EqualValues(t, recCount, 13)
 }
 
 func writeTempCSV(t *testing.T, header []string, rows [][]string) string {

@@ -74,10 +74,19 @@ func WriteActivity[T any, D domain.SinkConfig[T]](
 	}()
 
 	// Write the batch to the sink
-	out, err := sk.Write(ctx, in.Batch)
-	if err != nil {
-		l.Error("WriteActivity - error writing to sink", "error", err.Error())
-		return nil, temporal.NewApplicationErrorWithCause(err.Error(), err.Error(), err)
+	var out *domain.BatchProcess
+	if ws, ok := any(sk).(domain.WriteStreamer); ok {
+		out, err = ws.WriteStream(ctx, in.Batch)
+		if err != nil {
+			l.Error("WriteActivity - error writing stream to sink", "error", err.Error())
+			return nil, temporal.NewApplicationErrorWithCause(err.Error(), err.Error(), err)
+		}
+	} else {
+		out, err = sk.Write(ctx, in.Batch)
+		if err != nil {
+			l.Error("WriteActivity - error writing to sink", "error", err.Error())
+			return nil, temporal.NewApplicationErrorWithCause(err.Error(), err.Error(), err)
+		}
 	}
 
 	// record activity heartbeat

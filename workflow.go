@@ -129,17 +129,17 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	l.Debug("processBatchWorkflow request state hydrated", "source", req.Source.Name(), "sink", req.Sink.Name(), "start-at", req.StartAt, "workflow", wkflname)
 
 	// Get the fetch, write & snapshot activity aliases based on the source, sink & snapshotter
-	fetchActivityAlias := domain.GetFetchActivityName(req.Source)
+	// fetchActivityAlias := domain.GetFetchActivityName(req.Source)
 	writeActivityAlias := domain.GetWriteActivityName(req.Sink)
 	snapshotActivityAlias := domain.GetSnapshotActivityName(req.Snapshotter)
 
 	// setup activity options
-	fetchAO := buildFetchActivityOptions(req)
+	// fetchAO := buildFetchActivityOptions(req)
 	writeAO := buildWriteActivityOptions(req)
 	snapshotAO := buildSnapshotActivityOptions(req)
 
 	// setup fetch, write & snapshot contexts
-	fetchCtx := workflow.WithActivityOptions(ctx, fetchAO)
+	// fetchCtx := workflow.WithActivityOptions(ctx, fetchAO)
 	writeCtx := workflow.WithActivityOptions(ctx, writeAO)
 	snapshotCtx := workflow.WithActivityOptions(ctx, snapshotAO)
 
@@ -148,49 +148,52 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	// Initiate batch count & a new queue
 	batchCount := len(req.Batches)
 	q := list.New()
-	l.Debug("processBatchWorkflow context set & queue initiated", "source", req.Source.Name(), "sink", req.Sink.Name(), "workflow", wkflname, "start-at", req.StartAt, "fetch-activity", fetchActivityAlias, "write-activity", writeActivityAlias)
+	l.Debug(
+		"processBatchWorkflow context set & queue initiated",
+		"source", req.Source.Name(),
+		"sink", req.Sink.Name(),
+		"workflow", wkflname,
+		"start-at", req.StartAt,
+	)
 
 	if !req.Done {
 		// Fetch first batch from source
-		var fetched domain.FetchOutput[T]
-		if err := workflow.ExecuteActivity(fetchCtx, fetchActivityAlias, &domain.FetchInput[T, S]{
-			Source:    req.Source,
-			Offset:    req.Offsets[len(req.Offsets)-1],
-			BatchSize: req.BatchSize,
-		}).Get(fetchCtx, &fetched); err != nil {
-			l.Error("processBatchWorkflow fetch activity failed", "source", req.Source.Name(), "start-at", req.StartAt, "workflow", wkflname, "fetch-activity", fetchActivityAlias, "error", err.Error())
-			if execErr := executeErrorSnapshotActivity(snapshotCtx, snapshotActivityAlias, req, err); execErr != nil {
-				l.Error("processBatchWorkflow error snapshot activity failed", "snapshotter", req.Snapshotter.Name(), "start-at", req.StartAt, "workflow", wkflname, "snapshot-activity", snapshotActivityAlias, "error", execErr.Error())
-			}
-			return req, err
-		}
-
-		// Increment batch count
-		batchCount++
-
-		// Update request state with fetched batch
-		req.Offsets = append(req.Offsets, fetched.Batch.NextOffset)
-
-		batchId, err := domain.GetBatchId(fetched.Batch.StartOffset, fetched.Batch.NextOffset, "", "")
+		future, fetchedBatch, err := executeFetchAndWriteActivities(ctx, req)
 		if err != nil {
-			l.Error("processBatchWorkflow get batch ID failed", "snapshotter", req.Snapshotter.Name(), "source", req.Source.Name(), "sink", req.Sink.Name(), "start-at", req.StartAt, "workflow", wkflname, "error", err.Error())
+			return req, err
+		}
+		batchCount++
+		req.Offsets = append(req.Offsets, fetchedBatch.NextOffset)
+
+		batchId, err := domain.GetBatchId(fetchedBatch.StartOffset, fetchedBatch.NextOffset, "", "")
+		if err != nil {
+			l.Error(
+				"processBatchWorkflow get batch ID failed",
+				"snapshotter", req.Snapshotter.Name(),
+				"source", req.Source.Name(),
+				"sink", req.Sink.Name(),
+				"start-at", req.StartAt,
+				"workflow", wkflname,
+				"error", err.Error(),
+			)
 			if execErr := executeErrorSnapshotActivity(snapshotCtx, snapshotActivityAlias, req, err); execErr != nil {
-				l.Error("processBatchWorkflow error snapshot activity failed", "snapshotter", req.Snapshotter.Name(), "start-at", req.StartAt, "workflow", wkflname, "snapshot-activity", snapshotActivityAlias, "error", execErr.Error())
+				l.Error(
+					"processBatchWorkflow error snapshot activity failed",
+					"snapshotter", req.Snapshotter.Name(),
+					"start-at", req.StartAt,
+					"workflow", wkflname,
+					"snapshot-activity", snapshotActivityAlias,
+					"error", execErr.Error(),
+				)
 			}
 			return req, err
 		}
+		fetchedBatch.BatchId = batchId
+		req.Batches[fetchedBatch.BatchId] = fetchedBatch
+		req.Done = fetchedBatch.Done
 
-		fetched.Batch.BatchId = batchId
-		req.Batches[fetched.Batch.BatchId] = fetched.Batch
-		req.Done = fetched.Batch.Done
-
-		// Write first batch to sink (async) & push resulting future/promise to queue
-		future := workflow.ExecuteActivity(writeCtx, writeActivityAlias, &domain.WriteInput[T, D]{
-			Sink:  req.Sink,
-			Batch: fetched.Batch,
-		})
+		// Push the write future to the queue
 		q.PushBack(future)
-		l.Debug("processBatchWorkflow first batch pushed to queue", "source", req.Source.Name(), "sink", req.Sink.Name(), "start-at", req.StartAt, "workflow", wkflname, "fetch-activity", fetchActivityAlias, "write-activity", writeActivityAlias)
 	}
 
 	// While there are items in queue
@@ -199,43 +202,41 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		// there are remaining items to be processed & max batch limit is not reached
 		if q.Len() < int(req.MaxInProcessBatches) && !req.Done && batchCount < int(req.MaxBatches) {
 			// Fetch the next batch from the source
-			var fetched domain.FetchOutput[T]
-			if err := workflow.ExecuteActivity(fetchCtx, fetchActivityAlias, &domain.FetchInput[T, S]{
-				Source:    req.Source,
-				Offset:    req.Offsets[len(req.Offsets)-1],
-				BatchSize: req.BatchSize,
-			}).Get(fetchCtx, &fetched); err != nil {
-				// If error, execute error snapshot activity & return
-				if execErr := executeErrorSnapshotActivity(snapshotCtx, snapshotActivityAlias, req, err); execErr != nil {
-					l.Error("processBatchWorkflow error snapshot activity failed", "snapshotter", req.Snapshotter.Name(), "source", req.Source.Name(), "sink", req.Sink.Name(), "start-at", req.StartAt, "workflow", wkflname, "snapshot-activity", snapshotActivityAlias, "error", execErr.Error())
-				}
-				return req, err
-			}
-
-			// Increment batch count
-			batchCount++
-
-			// Update request state with fetched batch details
-			req.Offsets = append(req.Offsets, fetched.Batch.NextOffset)
-
-			batchId, err := domain.GetBatchId(fetched.Batch.StartOffset, fetched.Batch.NextOffset, "", "")
+			future, fetchedBatch, err := executeFetchAndWriteActivities(ctx, req)
 			if err != nil {
-				l.Error("processBatchWorkflow get batch ID failed", "snapshotter", req.Snapshotter.Name(), "source", req.Source.Name(), "sink", req.Sink.Name(), "start-at", req.StartAt, "workflow", wkflname, "error", err.Error())
+				return req, err
+			}
+			batchCount++
+			req.Offsets = append(req.Offsets, fetchedBatch.NextOffset)
+
+			batchId, err := domain.GetBatchId(fetchedBatch.StartOffset, fetchedBatch.NextOffset, "", "")
+			if err != nil {
+				l.Error(
+					"processBatchWorkflow get batch ID failed",
+					"snapshotter", req.Snapshotter.Name(),
+					"source", req.Source.Name(),
+					"sink", req.Sink.Name(),
+					"start-at", req.StartAt,
+					"workflow", wkflname,
+					"error", err.Error(),
+				)
 				if execErr := executeErrorSnapshotActivity(snapshotCtx, snapshotActivityAlias, req, err); execErr != nil {
-					l.Error("processBatchWorkflow error snapshot activity failed", "snapshotter", req.Snapshotter.Name(), "start-at", req.StartAt, "workflow", wkflname, "snapshot-activity", snapshotActivityAlias, "error", execErr.Error())
+					l.Error(
+						"processBatchWorkflow error snapshot activity failed",
+						"snapshotter", req.Snapshotter.Name(),
+						"start-at", req.StartAt,
+						"workflow", wkflname,
+						"snapshot-activity", snapshotActivityAlias,
+						"error", execErr.Error(),
+					)
 				}
 				return req, err
 			}
+			fetchedBatch.BatchId = batchId
+			req.Batches[fetchedBatch.BatchId] = fetchedBatch
+			req.Done = fetchedBatch.Done
 
-			fetched.Batch.BatchId = batchId
-			req.Batches[fetched.Batch.BatchId] = fetched.Batch
-			req.Done = fetched.Batch.Done
-
-			// Write next batch to sink (async) & push resulting future/promise to queue
-			future := workflow.ExecuteActivity(writeCtx, writeActivityAlias, &domain.WriteInput[T, D]{
-				Sink:  req.Sink,
-				Batch: fetched.Batch,
-			})
+			// Push the write future to the queue
 			q.PushBack(future)
 		} else {
 			// Remove future from queue & get output
@@ -247,23 +248,53 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 			if err := future.Get(writeCtx, &wOut); err != nil {
 				// If error, execute error snapshot activity & return
 				if execErr := executeErrorSnapshotActivity(snapshotCtx, snapshotActivityAlias, req, err); execErr != nil {
-					l.Error("processBatchWorkflow error snapshot activity failed", "snapshotter", req.Snapshotter.Name(), "source", req.Source.Name(), "sink", req.Sink.Name(), "start-at", req.StartAt, "workflow", wkflname, "snapshot-activity", snapshotActivityAlias, "error", execErr.Error())
+					l.Error(
+						"processBatchWorkflow error snapshot activity failed",
+						"snapshotter", req.Snapshotter.Name(),
+						"source", req.Source.Name(),
+						"sink", req.Sink.Name(),
+						"start-at", req.StartAt,
+						"workflow", wkflname,
+						"snapshot-activity", snapshotActivityAlias,
+						"error", execErr.Error(),
+					)
 				}
 				return req, err
 			}
 
 			batchId, err := domain.GetBatchId(wOut.Batch.StartOffset, wOut.Batch.NextOffset, "", "")
 			if err != nil {
-				l.Error("processBatchWorkflow get batch ID failed", "snapshotter", req.Snapshotter.Name(), "source", req.Source.Name(), "sink", req.Sink.Name(), "start-at", req.StartAt, "workflow", wkflname, "error", err.Error())
+				l.Error(
+					"processBatchWorkflow get batch ID failed",
+					"snapshotter", req.Snapshotter.Name(),
+					"source", req.Source.Name(),
+					"sink", req.Sink.Name(),
+					"start-at", req.StartAt,
+					"workflow", wkflname,
+					"error", err.Error(),
+				)
 				if execErr := executeErrorSnapshotActivity(snapshotCtx, snapshotActivityAlias, req, err); execErr != nil {
-					l.Error("processBatchWorkflow error snapshot activity failed", "snapshotter", req.Snapshotter.Name(), "start-at", req.StartAt, "workflow", wkflname, "snapshot-activity", snapshotActivityAlias, "error", execErr.Error())
+					l.Error(
+						"processBatchWorkflow error snapshot activity failed",
+						"snapshotter", req.Snapshotter.Name(),
+						"start-at", req.StartAt,
+						"workflow", wkflname,
+						"snapshot-activity", snapshotActivityAlias,
+						"error", execErr.Error(),
+					)
 				}
 				return req, err
 			}
 
 			// Update request state
 			if _, ok := req.Batches[batchId]; !ok {
-				l.Warn("processBatchWorkflow missing batch initial state", "source", req.Source.Name(), "sink", req.Sink.Name(), "start-at", req.StartAt, "workflow", wkflname, "batch-id", batchId, "fetch-activity", fetchActivityAlias, "write-activity", writeActivityAlias)
+				l.Warn(
+					"processBatchWorkflow write activity returned unknown batch ID",
+					"batch-id", batchId,
+					"start-at", req.StartAt,
+					"workflow", wkflname,
+					"write-activity", writeActivityAlias,
+				)
 			}
 			req.Batches[batchId] = wOut.Batch
 		}
@@ -274,7 +305,16 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	// build snapshot & execute snapshot activity
 	if req.Snapshot == nil || !slices.Contains(req.Snapshot.SnapshotIdx, req.StartAt) {
 		if reqSnapshot, execErr := executeResultSnapshotActivity(snapshotCtx, snapshotActivityAlias, req); execErr != nil {
-			l.Error("processBatchWorkflow snapshot activity failed", "snapshotter", req.Snapshotter.Name(), "source", req.Source.Name(), "sink", req.Sink.Name(), "start-at", req.StartAt, "workflow", wkflname, "snapshot-activity", snapshotActivityAlias, "error", execErr.Error())
+			l.Error(
+				"processBatchWorkflow snapshot activity failed",
+				"snapshotter", req.Snapshotter.Name(),
+				"source", req.Source.Name(),
+				"sink", req.Sink.Name(),
+				"start-at", req.StartAt,
+				"workflow", wkflname,
+				"snapshot-activity", snapshotActivityAlias,
+				"error", execErr.Error(),
+			)
 		} else {
 			// Update request snapshot & state snapshot
 			req.Snapshot = reqSnapshot
@@ -283,7 +323,14 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 
 	// Get continue as new suggested (for debugging)
 	if workflow.GetInfo(ctx).GetContinueAsNewSuggested() {
-		l.Warn("processBatchWorkflow continuing as new suggested", "curr-start-at", req.StartAt, "batches-processed", batchCount, "workflow", wkflname, "fetch-activity", fetchActivityAlias, "write-activity", writeActivityAlias, "snapshot-activity", snapshotActivityAlias)
+		l.Warn(
+			"processBatchWorkflow continuing as new suggested",
+			"curr-start-at", req.StartAt,
+			"batches-processed", batchCount,
+			"workflow", wkflname,
+			"write-activity", writeActivityAlias,
+			"snapshot-activity", snapshotActivityAlias,
+		)
 	}
 
 	// Check if workflow needs to be paused to reduce sink load
@@ -298,7 +345,17 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		}
 
 		if req.Snapshot.NumRecords/pauseRecCnt > req.Snapshot.PauseCount {
-			l.Error("processBatchWorkflow pausing to reduce sink load", "curr-start-at", req.StartAt, "batches-processed", batchCount, "workflow", wkflname, "fetch-activity", fetchActivityAlias, "write-activity", writeActivityAlias, "snapshot-activity", snapshotActivityAlias, "snapshot-pause-count", req.Snapshot.PauseCount, "snapshot-num-records", req.Snapshot.NumRecords, "num-processed", req.Snapshot.NumBatches)
+			l.Error(
+				"processBatchWorkflow pausing to reduce sink load",
+				"curr-start-at", req.StartAt,
+				"batches-processed", batchCount,
+				"workflow", wkflname,
+				"write-activity", writeActivityAlias,
+				"snapshot-activity", snapshotActivityAlias,
+				"snapshot-pause-count", req.Snapshot.PauseCount,
+				"snapshot-num-records", req.Snapshot.NumRecords,
+				"num-processed", req.Snapshot.NumBatches,
+			)
 			// Sleep for pause duration to reduce sink load
 			err := workflow.Sleep(ctx, pauseDur)
 			if err != nil {
@@ -312,7 +369,16 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	// Continue as new if items remaining but max batch count limit is reached
 	if !req.Done && batchCount >= int(req.MaxBatches) {
 		startAt := req.Offsets[len(req.Offsets)-1]
-		l.Debug("processBatchWorkflow continuing as new", "source", req.Source.Name(), "sink", req.Sink.Name(), "curr-start-at", req.StartAt, "new-start-at", startAt, "batches-processed", batchCount, "workflow", wkflname, "fetch-activity", fetchActivityAlias, "write-activity", writeActivityAlias)
+		l.Debug(
+			"processBatchWorkflow continuing as new",
+			"source", req.Source.Name(),
+			"sink", req.Sink.Name(),
+			"curr-start-at", req.StartAt,
+			"new-start-at", startAt,
+			"batches-processed", batchCount,
+			"workflow", wkflname,
+			"write-activity", writeActivityAlias,
+		)
 
 		// value copy of the request struct for continue as new
 		next := req
@@ -322,8 +388,71 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 		return nil, workflow.NewContinueAsNewError(ctx, wkflname, next)
 	}
 
-	l.Debug("processBatchWorkflow workflow processed", "source", req.Source.Name(), "sink", req.Sink.Name(), "workflow", wkflname, "fetch-activity", fetchActivityAlias, "write-activity", writeActivityAlias, "batch-count", batchCount)
+	l.Debug(
+		"processBatchWorkflow workflow processed",
+		"source", req.Source.Name(),
+		"sink", req.Sink.Name(),
+		"workflow", wkflname,
+		"write-activity", writeActivityAlias,
+		"batch-count", batchCount,
+	)
 	return req, nil
+}
+
+// executeFetchAndWriteActivities executes the fetch and write activities and returns the write future and fetched batch.
+func executeFetchAndWriteActivities[T any, S domain.SourceConfig[T], D domain.SinkConfig[T], SS domain.SnapshotConfig](
+	ctx workflow.Context,
+	req *domain.BatchProcessingRequest[T, S, D, SS],
+) (workflow.Future, *domain.BatchProcess, error) {
+	l := workflow.GetLogger(ctx)
+
+	wkflname := workflow.GetInfo(ctx).WorkflowType.Name
+
+	fetchActivityAlias := domain.GetFetchActivityName(req.Source)
+	writeActivityAlias := domain.GetWriteActivityName(req.Sink)
+	snapshotActivityAlias := domain.GetSnapshotActivityName(req.Snapshotter)
+
+	fetchAO := buildFetchActivityOptions(req)
+	writeAO := buildWriteActivityOptions(req)
+	snapshotAO := buildSnapshotActivityOptions(req)
+
+	fetchCtx := workflow.WithActivityOptions(ctx, fetchAO)
+	writeCtx := workflow.WithActivityOptions(ctx, writeAO)
+	snapshotCtx := workflow.WithActivityOptions(ctx, snapshotAO)
+
+	var fetched domain.FetchOutput[T]
+	if err := workflow.ExecuteActivity(fetchCtx, fetchActivityAlias, &domain.FetchInput[T, S]{
+		Source:    req.Source,
+		Offset:    req.Offsets[len(req.Offsets)-1],
+		BatchSize: req.BatchSize,
+	}).Get(fetchCtx, &fetched); err != nil {
+		l.Error(
+			"executeFetchAndWriteActivities fetch activity failed",
+			"source", req.Source.Name(),
+			"start-at", req.StartAt,
+			"workflow", wkflname,
+			"fetch-activity", fetchActivityAlias,
+			"error", err.Error(),
+		)
+		if execErr := executeErrorSnapshotActivity(snapshotCtx, snapshotActivityAlias, req, err); execErr != nil {
+			l.Error(
+				"executeFetchAndWriteActivities error snapshot activity failed",
+				"snapshotter", req.Snapshotter.Name(),
+				"start-at", req.StartAt,
+				"workflow", wkflname,
+				"snapshot-activity", snapshotActivityAlias,
+				"error", execErr.Error(),
+			)
+		}
+		return nil, nil, err
+	}
+	// Write next batch to sink (async) & push resulting future/promise to queue
+	future := workflow.ExecuteActivity(writeCtx, writeActivityAlias, &domain.WriteInput[T, D]{
+		Sink:  req.Sink,
+		Batch: fetched.Batch,
+	})
+
+	return future, fetched.Batch, nil
 }
 
 // executeResultSnapshotActivity builds and executes a result snapshot activity

@@ -85,9 +85,9 @@ type Sink[T any] interface {
 	Close(context.Context) error
 }
 
-// WriteStreamer[T any] is an interface for streaming writes of batches of T.
-type WriteStreamer[T any] interface {
-	WriteStream(ctx context.Context, start any, data []T) (<-chan BatchResult, error)
+// WriteStreamer is an interface for streaming writes of batches of T.
+type WriteStreamer interface {
+	WriteStream(ctx context.Context, b *BatchProcess) (*BatchProcess, error)
 }
 
 type SnapshotConfig interface {
