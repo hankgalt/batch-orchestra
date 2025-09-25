@@ -18,6 +18,31 @@ func GetSnapshotActivityName(snapCfg SnapshotConfig) string {
 	return "snapshot-" + snapCfg.Name() + "-batch-activity-alias"
 }
 
+func IsIdOffset(offset any) bool {
+	idOffset, ok := offset.(map[string]any)
+	if !ok {
+		return false
+	}
+	_, hasId := idOffset["id"]
+	return hasId
+}
+
+func GetOffsetId(offset any) (string, error) {
+	idOffset, ok := offset.(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("offset is not a map[string]any")
+	}
+	idVal, hasId := idOffset["id"]
+	if !hasId {
+		return "", fmt.Errorf("offset does not have 'id' key")
+	}
+	idStr, ok := idVal.(string)
+	if !ok {
+		return "", fmt.Errorf("offset 'id' value is not a string")
+	}
+	return idStr, nil
+}
+
 func GetBatchId(start, end any, prefix, suffix string) (string, error) {
 	if start == nil || end == nil {
 		return "", fmt.Errorf("start and end offsets must be non-nil")
@@ -33,9 +58,20 @@ func GetBatchId(start, end any, prefix, suffix string) (string, error) {
 		startStr, endStr = fmt.Sprintf("%f", start), fmt.Sprintf("%f", end)
 	case string:
 		startStr, endStr = start.(string), end.(string)
-	case CustomOffset[HasId]:
-		startStr = start.(CustomOffset[HasId]).Val.GetId()
-		endStr = end.(CustomOffset[HasId]).Val.GetId()
+	case map[string]any:
+		if !IsIdOffset(start) || !IsIdOffset(end) {
+			return "", fmt.Errorf("invalid offset map, must have 'id' key with string value")
+		}
+		if str, err := GetOffsetId(start); err != nil {
+			return "", err
+		} else {
+			startStr = str
+		}
+		if str, err := GetOffsetId(end); err != nil {
+			return "", err
+		} else {
+			endStr = str
+		}
 	default:
 		return "", fmt.Errorf("invalid offset type %T, must be numeric, string, or CustomOffset[HasId]", start)
 	}

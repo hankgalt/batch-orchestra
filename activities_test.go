@@ -29,11 +29,13 @@ import (
 // Source/Sink tied activity aliases for registration and lookup. These aliases
 // are needed to identify the activities for generic implementation.
 const (
-	FetchNextLocalCSVSourceBatchActivityAlias string = "fetch-next-" + sources.LocalCSVSource + "-batch-activity-alias"
-	FetchNextCloudCSVSourceBatchActivityAlias string = "fetch-next-" + sources.CloudCSVSource + "-batch-activity-alias"
-	WriteNextNoopSinkBatchActivityAlias       string = "write-next-" + sinks.NoopSink + "-batch-activity-alias"
-	WriteNextSQLLiteSinkBatchActivityAlias    string = "write-next-" + sinks.SQLLiteSink + "-batch-activity-alias"
-	SnapshotLocalFileBatchActivityAlias       string = "snapshot-" + snapshotters.LocalFileSnapshotter + "-batch-activity-alias"
+	FetchNextLocalCSVSourceBatchActivityAlias  string = "fetch-next-" + sources.LocalCSVSource + "-batch-activity-alias"
+	FetchNextCloudCSVSourceBatchActivityAlias  string = "fetch-next-" + sources.CloudCSVSource + "-batch-activity-alias"
+	FetchNextLocalJSONSourceBatchActivityAlias string = "fetch-next-" + sources.LocalJSONSource + "-batch-activity-alias"
+	WriteNextNoopSinkBatchActivityAlias        string = "write-next-" + sinks.NoopSink + "-batch-activity-alias"
+	WriteNextSQLLiteSinkBatchActivityAlias     string = "write-next-" + sinks.SQLLiteSink + "-batch-activity-alias"
+	WriteNextLocalJSONSinkBatchActivityAlias   string = "write-next-" + sinks.LocalJSONSink + "-batch-activity-alias"
+	SnapshotLocalFileBatchActivityAlias        string = "snapshot-" + snapshotters.LocalFileSnapshotter + "-batch-activity-alias"
 )
 
 type ETLRequest[T any] struct {
@@ -883,6 +885,166 @@ func Test_FetchAndWrite_Temp_LocalCSVSource_SQLLiteSink_Queue(t *testing.T) {
 	require.EqualValues(t, len(etlReq.Batches), 4)
 	require.EqualValues(t, len(etlReq.Offsets), 5)
 	require.EqualValues(t, recCount, 13)
+}
+
+func Test_FetchAndWrite_LocalJSONSource_LocalJSONSink_Queue(t *testing.T) {
+	// setup test environment
+	var suite testsuite.WorkflowTestSuite
+	env := suite.NewTestActivityEnvironment()
+
+	// setup logger & global activity execution context
+	l := logger.GetSlogLogger()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	ctx = logger.WithLogger(ctx, l)
+
+	env.SetWorkerOptions(worker.Options{
+		BackgroundActivityContext: ctx,
+		DeadlockDetectionTimeout:  24 * time.Hour, // set a long timeout to avoid deadlock detection during tests
+	})
+
+	env.SetTestTimeout(24 * time.Hour)
+
+	// Register activities.
+	env.RegisterActivityWithOptions(
+		bo.FetchNextActivity[any, *sources.LocalJSONSourceConfig],
+		activity.RegisterOptions{
+			Name: FetchNextLocalJSONSourceBatchActivityAlias,
+		},
+	)
+	env.RegisterActivityWithOptions(
+		bo.WriteActivity[any, *sinks.LocalJSONSinkConfig[any]],
+		activity.RegisterOptions{
+			Name: WriteNextLocalJSONSinkBatchActivityAlias,
+		},
+	)
+
+	// Build source & sink configurations
+	// Source - local JSON
+	sourceCfg := &sources.LocalJSONSourceConfig{
+		Path:    "./data/scheduler",
+		FileKey: "dummy-job-multiple-key",
+	}
+
+	// Sink - Local JSON
+	sinkCfg := &sinks.LocalJSONSinkConfig[any]{}
+
+	// Build ETL request
+	etlReq := &ETLRequest[any]{
+		MaxBatches: 2,
+		BatchSize:  1,
+		Done:       false,
+		Offsets:    []any{},
+		Batches:    map[string]*domain.BatchProcess{},
+	}
+
+	startOffset := map[string]any{
+		"id": "0",
+	}
+
+	etlReq.Offsets = append(etlReq.Offsets, startOffset)
+
+	// initiate a new queue
+	q := list.New()
+
+	// setup first batch request
+	fIn := &domain.FetchInput[any, *sources.LocalJSONSourceConfig]{
+		Source:    sourceCfg,
+		Offset:    etlReq.Offsets[len(etlReq.Offsets)-1],
+		BatchSize: etlReq.BatchSize,
+	}
+
+	// Execute the fetch activity for first batch
+	fVal, err := env.ExecuteActivity(FetchNextLocalJSONSourceBatchActivityAlias, fIn)
+	require.NoError(t, err)
+
+	var fOut domain.FetchOutput[any]
+	require.NoError(t, fVal.Get(&fOut))
+	require.Equal(t, true, len(fOut.Batch.Records) > 0)
+
+	// Store the fetched batch in ETL request
+	etlReq.Offsets = append(etlReq.Offsets, fOut.Batch.NextOffset)
+	etlReq.Done = fOut.Batch.Done
+
+	// setup first write request
+	wIn := &domain.WriteInput[any, *sinks.LocalJSONSinkConfig[any]]{
+		Sink:  sinkCfg,
+		Batch: fOut.Batch,
+	}
+
+	// Execute async the write activity for first batch
+	wVal, err := env.ExecuteActivity(WriteNextLocalJSONSinkBatchActivityAlias, wIn)
+	require.NoError(t, err)
+
+	// Push the write activity future to the queue
+	q.PushBack(wVal)
+
+	// while there are items in queue
+	count := 0
+	for q.Len() > 0 {
+		// if queue has less than max batches and batches are not done
+		if q.Len() < int(etlReq.MaxBatches) && !etlReq.Done {
+			fIn = &domain.FetchInput[any, *sources.LocalJSONSourceConfig]{
+				Source:    sourceCfg,
+				Offset:    etlReq.Offsets[len(etlReq.Offsets)-1],
+				BatchSize: etlReq.BatchSize,
+			}
+
+			fVal, err := env.ExecuteActivity(FetchNextLocalJSONSourceBatchActivityAlias, fIn)
+			require.NoError(t, err)
+
+			var fOut domain.FetchOutput[any]
+			require.NoError(t, fVal.Get(&fOut))
+			require.Equal(t, true, len(fOut.Batch.Records) > 0)
+
+			etlReq.Done = fOut.Batch.Done
+			etlReq.Offsets = append(etlReq.Offsets, fOut.Batch.NextOffset)
+
+			batchId, err := domain.GetBatchId(fOut.Batch.StartOffset, fOut.Batch.NextOffset, "", "")
+			if err != nil {
+				l.Error("failed to get batch id", "error", err)
+				t.FailNow()
+			}
+
+			etlReq.Batches[batchId] = fOut.Batch
+
+			wIn = &domain.WriteInput[any, *sinks.LocalJSONSinkConfig[any]]{
+				Sink:  sinkCfg,
+				Batch: fOut.Batch,
+			}
+
+			wVal, err := env.ExecuteActivity(WriteNextLocalJSONSinkBatchActivityAlias, wIn)
+			require.NoError(t, err)
+
+			q.PushBack(wVal)
+		} else {
+			if count < int(etlReq.MaxBatches) {
+				count++
+			} else {
+				count = 0
+				// Pause execution for 1 second
+				time.Sleep(1 * time.Second)
+			}
+			wVal := q.Remove(q.Front()).(converter.EncodedValue)
+			var wOut domain.WriteOutput[any]
+			require.NoError(t, wVal.Get(&wOut))
+			require.Equal(t, true, len(wOut.Batch.Records) > 0)
+
+			batchId, err := domain.GetBatchId(wOut.Batch.StartOffset, wOut.Batch.NextOffset, "", "")
+			if err != nil {
+				l.Error("failed to get batch id", "error", err)
+				t.FailNow()
+			}
+
+			if _, ok := etlReq.Batches[batchId]; !ok {
+				etlReq.Batches[batchId] = wOut.Batch
+			} else {
+				etlReq.Batches[batchId] = wOut.Batch
+			}
+		}
+	}
+
+	require.Equal(t, true, len(etlReq.Offsets) > 0)
 }
 
 func writeTempCSV(t *testing.T, header []string, rows [][]string) string {

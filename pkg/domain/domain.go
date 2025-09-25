@@ -8,24 +8,6 @@ import (
 // Domain "record" type that moves through the pipeline.
 type CSVRow map[string]string
 
-// Base carrier of the required field.
-type WithId struct{ Id string }
-
-func (w WithId) GetId() string { return w.Id }
-
-// Generic constraint: anything with GetId().
-type HasId interface{ GetId() string }
-
-// Your generic type that “requires Id”.
-type CustomOffset[T HasId] struct {
-	Val T
-}
-
-type JSONOffset struct {
-	WithId
-	Value string
-}
-
 type BatchResult struct {
 	Result any
 	Error  string
