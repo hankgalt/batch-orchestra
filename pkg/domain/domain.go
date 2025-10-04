@@ -126,6 +126,7 @@ type BatchProcessingRequest[T any, S SourceConfig[T], D SinkConfig[T], SS Snapsh
 	Offsets  []any                    // list of offsets for each batch
 	Batches  map[string]*BatchProcess // map of batch by ID
 	Snapshot *BatchSnapshot           // Processed snapshot
+	Size     int64                    // size of the source if known, -1 if unknown
 }
 
 type Rule struct {

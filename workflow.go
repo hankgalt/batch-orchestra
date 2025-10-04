@@ -2,6 +2,7 @@ package batch_orchestra
 
 import (
 	"container/list"
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -11,6 +12,7 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/comfforts/logger"
 	"github.com/hankgalt/batch-orchestra/pkg/domain"
 	"github.com/hankgalt/batch-orchestra/pkg/utils"
 )
@@ -142,6 +144,13 @@ func processBatchWorkflow[T any, S domain.SourceConfig[T], D domain.SinkConfig[T
 	// fetchCtx := workflow.WithActivityOptions(ctx, fetchAO)
 	writeCtx := workflow.WithActivityOptions(ctx, writeAO)
 	snapshotCtx := workflow.WithActivityOptions(ctx, snapshotAO)
+
+	// setup request source size if source has size & size not already set
+	if req.Size <= 0 {
+		if size, err := getSize(ctx, req); err == nil {
+			req.Size = size
+		}
+	}
 
 	// TODO retry case, check for error
 
@@ -481,17 +490,15 @@ func executeResultSnapshotActivity[T any, S domain.SourceConfig[T], D domain.Sin
 	result.NumBatches = reqSnapshot.NumBatches
 
 	// update done percentage if source has size
-	if p, ok := any(req.Source).(domain.HasSize); ok {
-		if p.Size() > 0 && len(result.Offsets) > 0 {
-			lastOffset := result.Offsets[len(result.Offsets)-1]
+	if req.Size > 0 && len(result.Offsets) > 0 {
+		lastOffset := result.Offsets[len(result.Offsets)-1]
 
-			if lastOffsetStr, ok := lastOffset.(string); ok {
-				if lastOffsetInt64, err := utils.ParseInt64(lastOffsetStr); err == nil {
-					reqSnapshot.DonePercentage = float32(lastOffsetInt64 / p.Size() * 100)
-					result.DonePercentage = reqSnapshot.DonePercentage
-				} else {
-					l.Error("executeResultSnapshotActivity error converting last offset to int64 for done percentage", "source", req.Source.Name(), "sink", req.Sink.Name(), "start-at", req.StartAt, "snapshot-activity", snapshotActivityAlias, "last-offset", lastOffset, "size", p.Size(), "error", err.Error())
-				}
+		if lastOffsetStr, ok := lastOffset.(string); ok {
+			if lastOffsetInt64, err := utils.ParseInt64(lastOffsetStr); err == nil {
+				reqSnapshot.DonePercentage = float32(lastOffsetInt64 / req.Size * 100)
+				result.DonePercentage = reqSnapshot.DonePercentage
+			} else {
+				l.Error("executeResultSnapshotActivity error converting last offset to int64 for done percentage", "source", req.Source.Name(), "sink", req.Sink.Name(), "start-at", req.StartAt, "snapshot-activity", snapshotActivityAlias, "last-offset", lastOffset, "size", req.Size, "error", err.Error())
 			}
 		}
 	}
@@ -507,6 +514,32 @@ func executeResultSnapshotActivity[T any, S domain.SourceConfig[T], D domain.Sin
 		return reqSnapshot, err
 	}
 	return reqSnapshot, nil
+}
+
+func getSize[T any, S domain.SourceConfig[T], D domain.SinkConfig[T], SS domain.SnapshotConfig](
+	ctx workflow.Context,
+	req *domain.BatchProcessingRequest[T, S, D, SS],
+) (int64, error) {
+	l := workflow.GetLogger(ctx)
+	sCtx := logger.WithLogger(context.Background(), l)
+
+	src, err := req.Source.BuildSource(sCtx)
+	if err != nil {
+		l.Error("getDonePercentage - error building source", "error", err.Error())
+		return 0, temporal.NewApplicationErrorWithCause(err.Error(), err.Error(), err)
+	}
+	// Ensure the source is closed after use
+	defer func() {
+		if err := src.Close(sCtx); err != nil {
+			l.Error("getDonePercentage - error closing source", "error", err.Error())
+		}
+	}()
+
+	if p, ok := any(req.Source).(domain.HasSize); ok {
+		return p.Size(), nil
+	}
+
+	return 0, nil
 }
 
 // executeErrorSnapshotActivity builds and executes an error snapshot activity
